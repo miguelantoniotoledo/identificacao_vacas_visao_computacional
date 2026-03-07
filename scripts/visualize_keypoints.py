@@ -36,6 +36,8 @@ DEFAULT_SEGMENTS: List[tuple[str, str]] = [
     ("hip", "tail_head"),
     ("tail_head", "pin_up"),
     ("pin_up", "pin_down"),
+    ("pin_down", "tail_head"),   # fecha traseiro
+    ("hook_up", "hook_down"),    # ligação entre hooks
 ]
 
 

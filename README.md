@@ -106,6 +106,24 @@ python scripts/unify_and_convert.py
 - Converte anotações Label Studio → formato YOLO pose
 - Copia imagens para `data/unified/`
 
+**Como verificar se deu certo:**
+
+1. **Script automático (recomendado):**
+   ```powershell
+   python scripts/verificar_unify_convert.py
+   ```
+   Com amostras de conteúdo dos labels:
+   ```powershell
+   python scripts/verificar_unify_convert.py --amostras 5
+   ```
+   Para plotar N imagens com **bbox e keypoints** desenhados (salvas em `outputs/statistics/verificar_unify_convert/`):
+   ```powershell
+   python scripts/verificar_unify_convert.py --plot 3
+   ```
+   O script confere: pastas existem, mesmo número de imagens e labels, cada imagem tem um `.txt` com o mesmo nome (stem), formato do label (classe + bbox + 8 keypoints × 3) e compara com o último run em `outputs/statistics/unify_and_convert_latest.json`.
+
+2. **Verificação manual:** conferir que em `data/unified/keypoints/` existem `images/` e `labels/` com a mesma quantidade de arquivos; para uma imagem qualquer (ex.: `foto.jpg`) deve existir `foto.txt` em `labels/` com uma linha no formato YOLO pose (classe, 4 bbox, 24 valores de keypoints). Ver também o JSON do último run: `converted` deve bater com o total e `failed` deve ser 0.
+
 #### 3.2. Preparar splits (train/val/test)
 
 ```powershell
