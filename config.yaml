@@ -1,0 +1,78 @@
+app:
+  name: "Identificacao de Vacas - Visao Computacional"
+  model_name: "yolov8"
+  image_size: 640
+  confidence_threshold: 0.5
+  top_k: 5
+
+paths:
+  data_dir: "data"
+  models_dir: "models"
+  outputs_dir: "outputs"
+  raw_dir: "raw"
+  unified_dir: "data/unified"
+  logs_dir: "outputs/logs"
+  statistics_dir: "outputs/statistics"
+
+# Pipeline de dados
+data:
+  catalogo_subdir: "catalogo"
+  classificacao_subdir: "classificacao"
+  keypoints_subdir: "Key_points"
+  image_size: 640
+  # Split 90/10 (treino/teste). Validação é fração do treino.
+  train_ratio: 0.9
+  val_ratio: 0.0
+  test_ratio: 0.1
+  # Parâmetro explícito: fração reservada para teste (usa-se com train_ratio = 1 - split_test_ratio)
+  split_test_ratio: 0.1
+  random_seed: 42
+
+# Validação de pose (reduz vazamento)
+pose:
+  k_folds: 5
+  strategy: "group_kfold"  # group_kfold | kfold_misturado
+  # group_kfold: agrupa por pasta (ex.: vaca/anotador); mesma pasta não fica em train e val
+
+# Augmentation (treino)
+augmentation:
+  enabled: true
+  horizontal_flip: 0.5
+  vertical_flip: 0.2
+  rotate_limit: 15
+  brightness_contrast: 0.2
+  gaussian_blur: 0.1
+  hue_saturation: 0.1
+  # Contraste e ruído no treino (imagens extras no split train)
+  contrast_limit: 0.25
+  gaussian_noise_std: 10.0
+  train_augment_copies: 1
+
+# Treino YOLO
+training:
+  device: "0"  # GPU (0, 1, ...) ou "cpu"
+  epochs: 200
+  batch_size: 16
+  # Early stopping: interrompe se a métrica de validação não melhorar em N épocas
+  patience: 20
+  workers: 4
+
+# Keypoints (ordem do Label Studio)
+keypoints:
+  names:
+    - withers
+    - back
+    - hook_up
+    - hook_down
+    - hip
+    - tail_head
+    - pin_up
+    - pin_down
+  skeleton: []  # opcional: pares de índices para desenhar esqueleto
+
+# Feature selection (para análise de importância e treino)
+feature_selection:
+  method: "mutual_info"  # mutual_info, rf_importance, pca
+  top_k: 5   # top-k para listagem/EDA
+  top_k_for_training: 15  # usar apenas as N melhores features em modelos treinados com features
+
