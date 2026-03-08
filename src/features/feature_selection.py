@@ -283,6 +283,14 @@ def _build_texture_color_feature_matrix(
     except Exception:
         return np.empty((0, 0)), []
 
+    def _imread_unicode(path: Path):
+        """Carrega imagem de Path (suporta nomes com acentos no Windows)."""
+        buf = path.read_bytes()
+        if not buf:
+            return None
+        arr = np.frombuffer(buf, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+
     n_samples, n_vals = X.shape
     n_kp = n_vals // 3
     if n_kp == 0:
@@ -303,10 +311,10 @@ def _build_texture_color_feature_matrix(
         feats: List[float] = []
         names_local: List[str] = []
 
-        # Carrega imagem (se existir)
+        # Carrega imagem (se existir; leitura em bytes evita falha com Unicode no Windows)
         img = None
         if img_path is not None and img_path.exists():
-            img = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
+            img = _imread_unicode(img_path)
 
         if img is None:
             # Sem imagem: todas as features ficam 0

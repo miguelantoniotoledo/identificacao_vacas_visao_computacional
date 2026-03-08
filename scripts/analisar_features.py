@@ -33,6 +33,14 @@ def main() -> None:
     cfg = get_full_config()
     root = Path(__file__).resolve().parents[1]
     logger = create_step_logger("analisar_features", root)
+
+    def log_and_print(msg: str) -> None:
+        logger.log(msg)
+        print(msg, flush=True)
+
+    log_and_print("=== EDA: Análise exploratória das features ===")
+    log_and_print("")
+
     unified = root / cfg.get("paths", {}).get("unified_dir", "data/unified")
     labels_dir = unified / "keypoints" / "labels"
     if not labels_dir.exists():
@@ -43,16 +51,20 @@ def main() -> None:
 
     out_dir = get_statistics_dir(root) / "eda"
     out_dir.mkdir(parents=True, exist_ok=True)
-    logger.log("Carregando labels de keypoints.")
+    log_and_print("[1/6] Diretório de saída: " + str(out_dir.relative_to(root)))
+    log_and_print("")
+
+    log_and_print("[2/6] Carregando labels de keypoints...")
     X_raw, y, img_paths = _load_keypoints_and_images(labels_dir)
     if X_raw.size == 0:
         logger.log("Nenhum dado de keypoints encontrado. Resultado: falha")
         logger.finalize({"n_samples": 0, "n_features": 0})
         print("Nenhum dado de keypoints encontrado.")
         sys.exit(1)
-    logger.log(f"Labels carregados: {len(X_raw)} amostras. Resultado: sucesso")
+    log_and_print(f"      Carregadas {len(X_raw)} amostras.")
+    log_and_print("")
 
-    logger.log("Construindo features geométricas.")
+    log_and_print("[3/6] Construindo features geométricas e de textura/cor...")
     kp_names = _get_kp_names()
     F, feat_names = _build_geometric_feature_matrix(X_raw, kp_names)
     if F.size == 0 or len(feat_names) == 0:
@@ -61,10 +73,11 @@ def main() -> None:
         print("Nenhuma feature geométrica gerada.")
         sys.exit(1)
     n_samples, n_feat = F.shape
-    logger.log(f"Features construídas: {n_samples} amostras, {n_feat} features. Resultado: sucesso")
+    log_and_print(f"      Geradas {n_samples} amostras x {n_feat} features.")
     top_k_train = get_top_k_for_training()
     top_names = select_top_keypoints(labels_dir, for_training=True)
-    logger.log(f"Para treino: usando as {top_k_train} melhores features. Primeiras: {top_names[:5]}{'...' if len(top_names) > 5 else ''}")
+    log_and_print(f"      Para treino: {top_k_train} melhores features (config: top_k_for_training).")
+    log_and_print("")
     report_lines = [
         "# Análise exploratória das features (EDA)",
         "",
@@ -93,7 +106,7 @@ def main() -> None:
     plt.tight_layout()
     fig.savefig(out_dir / "distribuicoes_features.png", dpi=150, bbox_inches="tight")
     plt.close()
-    logger.log("Gerando histogramas de features. Resultado: sucesso")
+    log_and_print("[4/6] Histogramas de distribuição gerados: distribuicoes_features.png")
 
     # Matriz de correlação (amostra de colunas se muitas)
     if n_feat > 2:
@@ -113,10 +126,13 @@ def main() -> None:
         plt.tight_layout()
         plt.savefig(out_dir / "correlacao_features.png", dpi=150, bbox_inches="tight")
         plt.close()
-        logger.log("Gerando matriz de correlação. Resultado: sucesso")
+        log_and_print("[5/6] Matriz de correlação gerada: correlacao_features.png")
+    else:
+        log_and_print("[5/6] Matriz de correlação: pulada (poucas features).")
 
     # PCA 2D (se houver amostras suficientes)
     if n_samples >= 10 and n_feat >= 2:
+        log_and_print("      Gerando projeção PCA 2D...")
         try:
             from sklearn.decomposition import PCA
             from sklearn.preprocessing import StandardScaler
@@ -135,29 +151,27 @@ def main() -> None:
             report_lines.append(f"- Variância explicada PC1: {100*pca.explained_variance_ratio_[0]:.2f}%")
             report_lines.append(f"- Variância explicada PC2: {100*pca.explained_variance_ratio_[1]:.2f}%")
             report_lines.append("")
-            logger.log("Gerando projeção PCA 2D. Resultado: sucesso")
+            log_and_print("      Projeção PCA 2D gerada: pca_2d.png")
         except Exception:
             logger.log("Gerando projeção PCA 2D. Resultado: falha (exceção)")
+            print("      [AVISO] PCA 2D não gerado (exceção).", flush=True)
+    elif n_feat >= 2:
+        log_and_print("      PCA 2D: pulado (poucas amostras).")
 
-    # Média e desvio por feature (resumo)
+    # Média e desvio por feature (todas as features, sem simplificação)
     report_lines.append("| Feature | Média | Desvio |")
     report_lines.append("|---------|-------|--------|")
-    for i, name in enumerate(feat_names[:30]):
+    for i, name in enumerate(feat_names):
         mean = float(np.nanmean(F[:, i]))
         std = float(np.nanstd(F[:, i]))
-        report_lines.append(f"| {name[:40]} | {mean:.4f} | {std:.4f} |")
-    if len(feat_names) > 30:
-        report_lines.append(f"... e mais {len(feat_names) - 30} features.")
+        report_lines.append(f"| {name} | {mean:.4f} | {std:.4f} |")
 
     (out_dir / "relatorio_eda.md").write_text("\n".join(report_lines), encoding="utf-8")
-    logger.log(f"Relatório EDA salvo em {out_dir}. Resultado: sucesso")
+    log_and_print("[6/6] Relatório EDA gerado: relatorio_eda.md (estatísticas de todas as features)")
+    log_and_print("")
+    log_and_print("Concluído. Saídas em: " + str(out_dir.relative_to(root)))
     log_path = logger.finalize({"n_samples": n_samples, "n_features": n_feat})
-    print(f"Log e métricas em: {log_path}")
-    print(f"EDA salvo em: {out_dir}")
-    print("  - distribuicoes_features.png")
-    print("  - correlacao_features.png")
-    print("  - pca_2d.png (se aplicável)")
-    print("  - relatorio_eda.md")
+    print(f"  Log e métricas: {log_path}", flush=True)
 
 
 if __name__ == "__main__":
