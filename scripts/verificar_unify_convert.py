@@ -13,7 +13,8 @@ Checa:
 Uso:
   python scripts/verificar_unify_convert.py
   python scripts/verificar_unify_convert.py --amostras 5   # mostra conteúdo de 5 labels
-  python scripts/verificar_unify_convert.py --plot 3       # salva 3 imagens com bbox e keypoints
+  python scripts/verificar_unify_convert.py --plot 3       # salva N imagens com bbox e keypoints
+  python scripts/verificar_unify_convert.py --image "caminho/para/imagem.jpg"  # desenha anotações originais em UMA imagem (label em data/unified/keypoints/labels pelo nome do arquivo)
 """
 
 import argparse
@@ -130,6 +131,13 @@ def main() -> None:
         metavar="N",
         help="Plota N imagens com bbox e keypoints; salva em outputs/statistics/verificar_unify_convert/ (0 = não plotar).",
     )
+    parser.add_argument(
+        "--image",
+        type=str,
+        default="",
+        metavar="PATH",
+        help="Uma única imagem para desenhar as anotações originais (keypoints que você anotou). O label é buscado em data/unified/keypoints/labels pelo nome do arquivo (stem). Pode ser caminho para imagem em raw ou em data/unified/keypoints/images.",
+    )
     args = parser.parse_args()
 
     cfg = get_full_config()
@@ -236,7 +244,33 @@ def main() -> None:
     except Exception:
         pass
 
-    # 6. Plotar N imagens com bbox e keypoints (opcional)
+    # 6. Uma imagem específica: desenhar anotações originais (--image)
+    if args.image and HAS_CV2:
+        root = Path(__file__).resolve().parents[1]
+        img_path = Path(args.image)
+        if not img_path.is_absolute():
+            img_path = (root / img_path).resolve()
+        if not img_path.exists():
+            img_path = images_dir / Path(args.image).name
+        if not img_path.exists():
+            print(f"  [FALHA] Imagem não encontrada: {args.image}")
+        else:
+            stem = img_path.stem
+            lbl_path = labels_dir / f"{stem}.txt"
+            if not lbl_path.exists():
+                print(f"  [FALHA] Label não encontrado para esta imagem: {lbl_path} (stem={stem})")
+            else:
+                out_plot_dir = root / cfg.get("paths", {}).get("statistics_dir", "outputs/statistics") / "verificar_unify_convert"
+                out_file = out_plot_dir / f"{stem}_anotacoes_originais{img_path.suffix}"
+                kp_names = _get_kp_names()
+                if _plot_imagem_bbox_keypoints(img_path, lbl_path, out_file, kp_names, DEFAULT_SEGMENTS):
+                    print(f"\n  [OK] Anotações originais desenhadas em: {out_file.relative_to(root)}")
+                else:
+                    print(f"\n  [FALHA] Não foi possível gerar a imagem.")
+    elif args.image and not HAS_CV2:
+        print("\n  [AVISO] --image requer opencv-python. Instale: pip install opencv-python")
+
+    # 7. Plotar N imagens com bbox e keypoints (opcional)
     if args.plot > 0 and HAS_CV2:
         out_plot_dir = root / cfg.get("paths", {}).get("statistics_dir", "outputs/statistics") / "verificar_unify_convert"
         kp_names = _get_kp_names()
