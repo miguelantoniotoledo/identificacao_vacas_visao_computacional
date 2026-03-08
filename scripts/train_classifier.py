@@ -51,6 +51,17 @@ def main() -> None:
 
     logger.log(f"Iniciando treino classificador. Classes: {len(cow_folders)}. Resultado: iniciado")
     device = training.get("device", "0")
+    try:
+        import torch
+        if str(device).lower() == "cpu" or not torch.cuda.is_available():
+            _dev_str = "cpu (CUDA não disponível ou device=cpu no config)"
+        else:
+            _dev_str = f"cuda:{device}" if str(device).isdigit() else str(device)
+        print(f"Device: {_dev_str}", flush=True)
+        logger.log(f"Device de treino: {_dev_str}")
+    except Exception:
+        print(f"Device (config): {device}", flush=True)
+        logger.log(f"Device de treino (config): {device}")
     epochs = training.get("epochs", 100)
     batch = training.get("batch_size", 16)
     patience = training.get("patience", 20)  # early stopping

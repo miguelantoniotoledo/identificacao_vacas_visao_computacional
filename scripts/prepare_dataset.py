@@ -17,11 +17,15 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     logger = create_step_logger("prepare_dataset", root)
 
-    logger.log("Preparando dataset de pose...")
-    train, val, test, counts = prepare_pose_dataset(step_log=logger.log)
-    logger.log(f"Train: {train}")
-    logger.log(f"Val:   {val}")
-    logger.log(f"Test:  {test}")
+    def log_and_print(msg: str) -> None:
+        logger.log(msg)
+        print(msg, flush=True)
+
+    log_and_print("Preparando dataset de pose...")
+    train, val, test, counts = prepare_pose_dataset(step_log=log_and_print)
+    log_and_print(f"Train: {train}")
+    log_and_print(f"Val:   {val}")
+    log_and_print(f"Test:  {test}")
 
     metrics = dict(counts)
     log_path = logger.finalize(metrics)

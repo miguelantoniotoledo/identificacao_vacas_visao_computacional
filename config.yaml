@@ -20,21 +20,20 @@ data:
   classificacao_subdir: "classificacao"
   keypoints_subdir: "Key_points"
   image_size: 640
-  # Split 90/10 (treino/teste). Validação é fração do treino.
-  train_ratio: 0.9
-  val_ratio: 0.0
-  test_ratio: 0.1
-  # Parâmetro explícito: fração reservada para teste (usa-se com train_ratio = 1 - split_test_ratio)
+  # Split 80/10/10 (treino/validação/teste) por pasta em stratified_per_group
+  train_ratio: 0.8   # 80% de cada pasta para treino
+  val_ratio: 0.1    # 10% de cada pasta para validação (durante o treino)
+  test_ratio: 0.1   # 10% de cada pasta para teste (avaliar modelo final)
   split_test_ratio: 0.1
   random_seed: 42
 
 # Validação de pose (reduz vazamento)
 pose:
   k_folds: 5
-  strategy: "group_kfold"  # group_kfold | kfold_misturado
-  # group_kfold: agrupa por pasta (ex.: vaca/anotador); mesma pasta não fica em train e val
+  # stratified_per_group: 80% train, 10% val, 10% test por pasta (sem overlap)
+  strategy: "stratified_per_group"  # stratified_per_group | group_kfold | kfold_misturado
 
-# Augmentation (treino)
+# Augmentation (treino) - aplicadas no prepare_dataset (offline) e opcionalmente no YOLO
 augmentation:
   enabled: true
   horizontal_flip: 0.5
@@ -43,10 +42,12 @@ augmentation:
   brightness_contrast: 0.2
   gaussian_blur: 0.1
   hue_saturation: 0.1
-  # Contraste e ruído no treino (imagens extras no split train)
   contrast_limit: 0.25
   gaussian_noise_std: 10.0
   train_augment_copies: 1
+  # Mosaic: combina 4 imagens em uma (2x2). Gera o máximo possível a partir do conjunto de treino
+  # (uma imagem mosaic a cada 4 imagens; cada imagem de treino entra em exatamente um mosaic).
+  mosaic_enabled: true
 
 # Treino YOLO
 training:

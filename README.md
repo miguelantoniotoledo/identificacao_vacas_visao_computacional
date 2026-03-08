@@ -31,7 +31,7 @@ raw/catalogo, raw/classificacao
 | Passo | Script | O que faz |
 |-------|--------|-----------|
 | **1/6** | `unify_and_convert.py` | Unifica pastas em `raw/`; converte anotações Label Studio (JSON) → YOLO pose; copia imagens e grava labels em `data/unified/keypoints/`. Nomes com prefixo da pasta para group k-fold. |
-| **2/6** | `prepare_dataset.py` | Split 90/10 (configurável); opcional **group k-fold** por pasta; copia train/val/test; **augmentation** no treino (contraste + ruído gaussiano); gera `data.yaml` para YOLO. |
+| **2/6** | `prepare_dataset.py` | Split 80/10/10 por pasta; **todas as augmentations** (flip, rotate, blur, HSV, ruído) + **mosaic** (2x2) no treino; gera `data.yaml`. |
 | **3/6** | `analisar_features.py` | EDA: carrega labels, monta features geométricas, calcula as 15 melhores para treino; gera histogramas, correlação, PCA 2D e relatório em `outputs/statistics/eda/`. |
 | **4/6** | `train_keypoints.py` | Treina YOLOv8-pose (keypoints); **early stopping** (patience); se houver k-fold, treina por fold e escolhe o melhor por mAP50-95; salva `best.pt` em `outputs/keypoints/train/weights/`. |
 | **5/6** | `train_classifier.py` | Treina YOLOv8-cls (uma classe por pasta em `data/unified/classification/`); **early stopping**; salva modelo em `outputs/classifier/train/`. |
@@ -130,6 +130,8 @@ python scripts/unify_and_convert.py
 python scripts/prepare_dataset.py
 ```
 
+Por padrão usa **stratified_per_group**: em cada pasta, **80% treino**, **10% validação** e **10% teste** (conjuntos disjuntos). Config: `data.train_ratio: 0.8`, `data.val_ratio: 0.1`, `data.split_test_ratio: 0.1`.
+
 #### 3.3. Treinar modelo de keypoints
 
 ```powershell
@@ -140,6 +142,18 @@ python scripts/train_keypoints.py
 - Treino em GPU (configurável em `config.yaml` → `training.device`)
 - Augmentation automático pelo Ultralytics
 - Se existir **k-fold** (group k-fold por pasta, em `data/unified/yolo_pose/fold_1/`, …), treina um modelo por fold e escolhe o melhor por mAP50-95; o `best.pt` do melhor fold é copiado para `outputs/keypoints/train/weights/best.pt` para inferência
+
+#### 3.3.1. Avaliar o modelo de keypoints no conjunto de **teste**
+
+O split 80/10/10 coloca 10% de cada pasta em **teste** (`data/unified/yolo_pose/test/`). Essas imagens **não são usadas no treino nem na validação**. Para obter as métricas finais no hold-out de teste:
+
+```powershell
+python scripts/evaluate_keypoints.py
+```
+
+- Usa por padrão o modelo `outputs/keypoints/train/weights/best.pt` e o `data.yaml` em `data/unified/yolo_pose/` (que aponta `test` para `test/images`).
+- Para outro modelo: `python scripts/evaluate_keypoints.py --weights caminho/para/best.pt`
+- As métricas impressas (mAP, precisão, recall, etc.) são as do **conjunto de teste**, ou seja, a estimativa de desempenho em dados nunca vistos no treino.
 
 #### 3.4. Treinar classificador de vacas
 
@@ -233,7 +247,7 @@ O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 |-------|-----------|
 | `paths` | `raw_dir`, `unified_dir`, `outputs_dir`, `logs_dir`, `statistics_dir` |
 | `data` | `image_size`, `train_ratio`, `val_ratio`, `random_seed` |
-| `augmentation` | `horizontal_flip`, `vertical_flip`, `rotate_limit`, etc. |
+| `augmentation` | `horizontal_flip`, `vertical_flip`, `rotate_limit`, `contrast_limit`, `gaussian_noise_std`, `train_augment_copies`, `mosaic_enabled` (mosaic usa todo o conjunto: 1 mosaic a cada 4 imagens) |
 | `training` | `device` (GPU), `epochs`, `batch_size`, `patience` |
 | `keypoints` | Nomes dos 8 pontos anatômicos |
 | `feature_selection` | `method` (mutual_info, rf_importance), `top_k` |
@@ -268,6 +282,7 @@ O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 │   ├── unify_and_convert.py
 │   ├── prepare_dataset.py
 │   ├── train_keypoints.py
+│   ├── evaluate_keypoints.py   # avaliar keypoints no conjunto de teste
 │   ├── train_classifier.py
 │   ├── visualize_keypoints.py
 │   ├── predict_cow.py
@@ -281,8 +296,24 @@ Para usar GPU, instale PyTorch com suporte CUDA e configure em `config.yaml`:
 
 ```yaml
 training:
-  device: "0"   # ID da GPU
+  device: "0"   # ID da GPU (use "cpu" para forçar CPU)
 ```
+
+**Verificar se o PyTorch está usando CUDA:**
+
+```powershell
+python scripts/verificar_cuda.py
+```
+
+Se aparecer "CUDA disponível: Não", em geral o PyTorch foi instalado na versão CPU. **Solução:** desinstale e reinstale com o índice CUDA (veja [docs/CUDA_WINDOWS.md](docs/CUDA_WINDOWS.md)):
+
+```powershell
+pip uninstall torch torchvision torchaudio -y
+pip cache purge
+pip install torch torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/cu121
+```
+
+Depois reinicie o terminal e rode `verificar_cuda.py` de novo. Detalhes e outras versões (cu124, etc.) em [docs/CUDA_WINDOWS.md](docs/CUDA_WINDOWS.md).
 
 ## Feature selection
 

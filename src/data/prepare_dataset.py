@@ -1,16 +1,23 @@
 """
 Prepara splits train/val/test e estrutura YOLO para treino.
-Suporta group k-fold (por pasta) para reduzir vazamento e augmentation (contraste + ruído).
+- stratified_per_group: em cada pasta (grupo), 80%% treino, 10%% validação e 10%% teste,
+  garantindo que train/val/test são conjuntos disjuntos (sem vazamento).
+- group_kfold: grupos inteiros em train ou val por fold (para k_folds > 1).
 """
 
 import random
 import shutil
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Any
 
 import yaml
 
 from src.config import get_full_config
+from src.data.augmentation import get_offline_pose_augmentation
+
+# YOLO pose: uma linha por objeto: class cx cy w h kp1_x kp1_y kp1_v ... (8 keypoints)
+N_KEYPOINTS = 8
+YOLO_POSE_VALS = 5 + N_KEYPOINTS * 3  # 29
 
 
 def _get_image_files(images_dir: Path) -> List[Path]:
@@ -25,6 +32,75 @@ def _group_from_stem(stem: str) -> str:
     return stem
 
 
+def _imread_unicode(path: Path):
+    """
+    Carrega imagem de um Path (suporta nomes com acentos no Windows).
+    cv2.imread falha com caminhos Unicode no Windows; usar leitura em bytes + imdecode.
+    """
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return None
+    buf = path.read_bytes()
+    if not buf:
+        return None
+    arr = np.frombuffer(buf, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    return img
+
+
+def _imwrite_unicode(path: Path, img) -> bool:
+    """
+    Salva imagem em Path (suporta nomes com acentos no Windows).
+    cv2.imwrite falha com caminhos Unicode no Windows; usar imencode + write_bytes.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return False
+    ext = path.suffix.lower()
+    if ext in (".jpg", ".jpeg"):
+        enc = cv2.imencode(".jpg", img)
+    elif ext == ".png":
+        enc = cv2.imencode(".png", img)
+    else:
+        enc = cv2.imencode(".jpg", img)
+    if enc[0]:
+        path.write_bytes(enc[1].tobytes())
+        return True
+    return False
+
+
+def _parse_yolo_pose_line(line: str, img_w: int, img_h: int) -> Optional[Tuple[int, List[float], List[Tuple[float, float]], List[int]]]:
+    """Retorna (class, bbox_norm [cx,cy,w,h], keypoints_px [(x,y),...], visibilities) ou None."""
+    parts = line.strip().split()
+    if len(parts) < YOLO_POSE_VALS:
+        return None
+    vals = [float(x) for x in parts[:YOLO_POSE_VALS]]
+    cls = int(vals[0])
+    bbox = vals[1:5]  # cx, cy, w, h normalized
+    keypoints_px = []
+    vis = []
+    for j in range(N_KEYPOINTS):
+        x_n, y_n, v = vals[5 + j * 3], vals[5 + j * 3 + 1], int(vals[5 + j * 3 + 2])
+        keypoints_px.append((x_n * img_w, y_n * img_h))
+        vis.append(v)
+    return (cls, bbox, keypoints_px, vis)
+
+
+def _yolo_pose_line_from_bbox_kp(cls: int, bbox: List[float], keypoints_px: List[Tuple[float, float]], vis: List[int], img_w: int, img_h: int) -> str:
+    """Monta uma linha YOLO pose a partir de bbox normalizado e keypoints em pixels."""
+    parts = [str(cls), f"{bbox[0]:.6f}", f"{bbox[1]:.6f}", f"{bbox[2]:.6f}", f"{bbox[3]:.6f}"]
+    for (x, y), v in zip(keypoints_px, vis):
+        xn = x / img_w if img_w else 0
+        yn = y / img_h if img_h else 0
+        xn = max(0, min(1, xn))
+        yn = max(0, min(1, yn))
+        parts.extend([f"{xn:.6f}", f"{yn:.6f}", str(v)])
+    return " ".join(parts)
+
+
 def _apply_train_augmentation(
     img_path: Path,
     lbl_path: Path,
@@ -33,35 +109,130 @@ def _apply_train_augmentation(
     n_copies: int,
     contrast_limit: float,
     gaussian_noise_std: float,
+    transform: Optional[Any] = None,
 ) -> int:
-    """Gera n_copies imagens com contraste e ruído gaussiano; copia label. Retorna quantas foram salvas."""
+    """
+    Gera n_copies imagens augmentadas. Se transform (Albumentations) for passado,
+    aplica todas as augmentations planejadas (flip, rotate, blur, HSV, ruído, etc.)
+    com atualização de bbox e keypoints; senão usa apenas contraste + ruído (fallback).
+    """
+    try:
+        import numpy as np
+    except ImportError:
+        return 0
+    img = _imread_unicode(img_path)
+    if img is None:
+        return 0
+    label_content = lbl_path.read_text(encoding="utf-8").strip()
+    if not label_content:
+        return 0
+    h, w = img.shape[:2]
+    parsed = _parse_yolo_pose_line(label_content, w, h)
+    if parsed is None:
+        return 0
+    cls, bbox, keypoints_px, vis = parsed
+    stem = img_path.stem
+    ext = img_path.suffix
+    count = 0
+
+    for i in range(1, n_copies + 1):
+        if transform is not None:
+            try:
+                transformed = transform(
+                    image=img,
+                    bboxes=[bbox],
+                    class_labels=[cls],
+                    keypoints=keypoints_px,
+                )
+                out_img = transformed["image"]
+                t_bboxes = transformed["bboxes"]
+                t_kp = transformed["keypoints"]
+                if not t_bboxes or not t_kp:
+                    continue
+                new_bbox = t_bboxes[0]
+                out_h, out_w = out_img.shape[:2]
+                new_line = _yolo_pose_line_from_bbox_kp(cls, new_bbox, t_kp, vis, out_w, out_h)
+            except Exception:
+                continue
+        else:
+            out_img = img.astype(np.float64)
+            alpha = 1.0 + random.uniform(-contrast_limit, contrast_limit)
+            beta = random.uniform(-20, 20)
+            out_img = np.clip(alpha * out_img + beta, 0, 255).astype(np.uint8)
+            noise = np.random.normal(0, gaussian_noise_std, out_img.shape).astype(np.float64)
+            out_img = np.clip(out_img.astype(np.float64) + noise, 0, 255).astype(np.uint8)
+            new_line = label_content
+
+        out_name = f"{stem}_aug{i}{ext}"
+        if _imwrite_unicode(out_images / out_name, out_img):
+            (out_labels / f"{stem}_aug{i}.txt").write_text(new_line, encoding="utf-8")
+            count += 1
+    return count
+
+
+def _create_mosaic_pose(
+    list_of_img_label: List[Tuple[Any, str]],
+    out_images: Path,
+    out_labels: Path,
+    mosaic_idx: int,
+    size: int = 640,
+) -> bool:
+    """
+    Cria uma imagem mosaic 2x2 a partir de 4 (imagem, linha_yolo).
+    Cada imagem é redimensionada para size/2 x size/2 e colocada em um quadrante.
+    Retorna True se salvou com sucesso.
+    """
     try:
         import cv2
         import numpy as np
     except ImportError:
-        return 0
-    img = cv2.imread(str(img_path))
-    if img is None:
-        return 0
-    label_content = lbl_path.read_text(encoding="utf-8").strip()
-    stem = img_path.stem
-    ext = img_path.suffix
-    count = 0
-    for i in range(1, n_copies + 1):
-        out_img = img.astype(np.float64)
-        # Contraste/brilho
-        alpha = 1.0 + random.uniform(-contrast_limit, contrast_limit)
-        beta = random.uniform(-20, 20)
-        out_img = np.clip(alpha * out_img + beta, 0, 255).astype(np.uint8)
-        # Ruído gaussiano
-        noise = np.random.normal(0, gaussian_noise_std, out_img.shape).astype(np.float64)
-        out_img = np.clip(out_img.astype(np.float64) + noise, 0, 255).astype(np.uint8)
-        out_name = f"{stem}_aug{i}{ext}"
-        out_path = out_images / out_name
-        cv2.imwrite(str(out_path), out_img)
-        (out_labels / f"{stem}_aug{i}.txt").write_text(label_content, encoding="utf-8")
-        count += 1
-    return count
+        return False
+    if len(list_of_img_label) < 4:
+        return False
+    half = size // 2
+    canvas = np.zeros((size, size, 3), dtype=np.uint8)
+    all_lines: List[str] = []
+
+    for quad, (img, line) in enumerate(list_of_img_label):
+        if img is None or img.size == 0:
+            return False
+        img_small = cv2.resize(img, (half, half), interpolation=cv2.INTER_LINEAR)
+        if quad == 0:
+            canvas[0:half, 0:half] = img_small
+            dx_norm, dy_norm = 0.0, 0.0
+        elif quad == 1:
+            canvas[0:half, half:size] = img_small
+            dx_norm, dy_norm = 0.5, 0.0
+        elif quad == 2:
+            canvas[half:size, 0:half] = img_small
+            dx_norm, dy_norm = 0.0, 0.5
+        else:
+            canvas[half:size, half:size] = img_small
+            dx_norm, dy_norm = 0.5, 0.5
+
+        parsed = _parse_yolo_pose_line(line, half, half)
+        if parsed is None:
+            continue
+        cls, bbox, kp_px, vis = parsed
+        cx, cy, bw, bh = bbox
+        new_cx = cx * 0.5 + dx_norm
+        new_cy = cy * 0.5 + dy_norm
+        new_bw = bw * 0.5
+        new_bh = bh * 0.5
+        # Keypoints: de pixels no patch (half x half) para normalizados no canvas (size x size)
+        new_kp_norm = [((x / half) * 0.5 + dx_norm, (y / half) * 0.5 + dy_norm) for x, y in kp_px]
+        new_kp_px = [(xn * size, yn * size) for xn, yn in new_kp_norm]
+        line_str = _yolo_pose_line_from_bbox_kp(cls, [new_cx, new_cy, new_bw, new_bh], new_kp_px, vis, size, size)
+        all_lines.append(line_str)
+
+    if not all_lines:
+        return False
+    out_name = f"mosaic_{mosaic_idx}.jpg"
+    full_label = "\n".join(all_lines)
+    if _imwrite_unicode(out_images / out_name, canvas):
+        (out_labels / f"mosaic_{mosaic_idx}.txt").write_text(full_label, encoding="utf-8")
+        return True
+    return False
 
 
 def prepare_pose_dataset(
@@ -93,6 +264,8 @@ def prepare_pose_dataset(
     contrast_limit = aug_cfg.get("contrast_limit", 0.25)
     gaussian_noise_std = aug_cfg.get("gaussian_noise_std", 10.0)
     train_augment_copies = aug_cfg.get("train_augment_copies", 0)
+    mosaic_enabled = aug_cfg.get("mosaic_enabled", False)
+    image_size = data_cfg.get("image_size", 640)
 
     images_dir = unified / "keypoints" / "images"
     labels_dir = unified / "keypoints" / "labels"
@@ -105,21 +278,23 @@ def prepare_pose_dataset(
         if lbl.exists():
             files.append((img, lbl))
 
-    if step_log:
-        step_log(f"Preparando dataset de pose. Total de pares imagem/label: {len(files)}")
-
     random.seed(seed)
     n_total = len(files)
+    if step_log:
+        step_log(f"Listagem concluída: {n_total} pares imagem/label em {images_dir}")
 
-    # Split teste (ex.: 10%)
-    n_test = int(n_total * test_ratio)
-    random.shuffle(files)
-    test_f = files[:n_test]
-    train_val_f = files[n_test:]
+    if n_total == 0:
+        raise ValueError("Nenhum par imagem/label encontrado. Verifique pastas keypoints/images e keypoints/labels.")
 
-    # Grupos para group k-fold (por prefixo no nome)
-    groups = [_group_from_stem(img.stem) for img, _ in train_val_f]
-    unique_groups = list(dict.fromkeys(groups))
+    if step_log:
+        step_log("Agrupando por pasta (prefixo do nome antes de __)...")
+
+    # Agrupar por pasta (prefixo do nome antes de __)
+    groups_dict: Dict[str, List[Tuple[Path, Path]]] = {}
+    for img, lbl in files:
+        g = _group_from_stem(img.stem)
+        groups_dict.setdefault(g, []).append((img, lbl))
+    unique_groups = list(groups_dict.keys())
     n_groups = len(unique_groups)
 
     kp_names = cfg.get("keypoints", {}).get("names", [])
@@ -131,9 +306,133 @@ def prepare_pose_dataset(
 
     out = unified / "yolo_pose"
     out.mkdir(parents=True, exist_ok=True)
+    if step_log:
+        step_log(f"Diretório de saída: {out}")
 
     train_f: List[Tuple[Path, Path]] = []
     val_f: List[Tuple[Path, Path]] = []
+    test_f: List[Tuple[Path, Path]] = []
+
+    PROGRESS_INTERVAL = 100
+
+    # Estratificado por pasta: 80% train, 10% val, 10% test por grupo (sem overlap)
+    if strategy == "stratified_per_group":
+        if step_log:
+            step_log(f"Estratificado por grupo: {n_groups} grupos. Aplicando 80% train / 10% val / 10% test por grupo...")
+        # Por grupo: shuffle -> train_ratio (80%), val_ratio (10%), resto test (10%)
+        for gname, gfiles in groups_dict.items():
+            random.shuffle(gfiles)
+            n = len(gfiles)
+            n_train = max(0, int(round(n * train_ratio)))
+            n_val = max(0, int(round(n * val_ratio)))
+            n_test = n - n_train - n_val  # resto para test (garante soma = n)
+            if n_test < 0:
+                n_test = 0
+                n_train = n - n_val
+            train_f.extend(gfiles[: n_train])
+            val_f.extend(gfiles[n_train : n_train + n_val])
+            test_f.extend(gfiles[n_train + n_val :])
+        if step_log:
+            step_log(
+                f"Split definido: Train={len(train_f)}, Val={len(val_f)}, Test={len(test_f)}. Sem overlap."
+            )
+        for split_list, name in [(train_f, "train"), (val_f, "val"), (test_f, "test")]:
+            img_out = out / name / "images"
+            lbl_out = out / name / "labels"
+            img_out.mkdir(parents=True, exist_ok=True)
+            lbl_out.mkdir(parents=True, exist_ok=True)
+            total = len(split_list)
+            if step_log:
+                step_log(f"Copiando {total} arquivos para {name}/...")
+            for i, (img, lbl) in enumerate(split_list):
+                shutil.copy2(img, img_out / img.name)
+                shutil.copy2(lbl, lbl_out / lbl.name)
+                if step_log and (i + 1) % PROGRESS_INTERVAL == 0:
+                    step_log(f"  {name}: {i + 1}/{total}")
+            if step_log:
+                step_log(f"  {name}: {total}/{total} concluído.")
+            if name == "train" and train_augment_copies > 0:
+                offline_transform = get_offline_pose_augmentation()
+                if step_log:
+                    if offline_transform is not None:
+                        step_log(
+                            f"Aplicando todas as augmentations planejadas em train (flip, rotate, blur, HSV, ruído; "
+                            f"{train_augment_copies} cópia(s) por imagem)..."
+                        )
+                    else:
+                        step_log(
+                            f"Aplicando augmentation em train (contraste + ruído; {train_augment_copies} cópia(s) por imagem)..."
+                        )
+                for i, (img, lbl) in enumerate(split_list):
+                    _apply_train_augmentation(
+                        img_out / img.name,
+                        lbl_out / lbl.name,
+                        img_out,
+                        lbl_out,
+                        train_augment_copies,
+                        contrast_limit,
+                        gaussian_noise_std,
+                        transform=offline_transform,
+                    )
+                    if step_log and (i + 1) % PROGRESS_INTERVAL == 0:
+                        step_log(f"  augmentation: {i + 1}/{total}")
+                if step_log:
+                    step_log(f"  augmentation: {total}/{total} concluído.")
+            if name == "train" and mosaic_enabled and len(split_list) >= 4:
+                n_mosaic = len(split_list) // 4  # máximo possível: uma mosaic a cada 4 imagens (todo o conjunto)
+                shuffled_train = list(split_list)
+                random.shuffle(shuffled_train)
+                img_out = out / "train" / "images"
+                lbl_out = out / "train" / "labels"
+                if step_log:
+                    step_log(f"Gerando {n_mosaic} imagens mosaic (2x2) em train/ (todo o conjunto, 4 imagens por mosaic)...")
+                for i in range(n_mosaic):
+                    group = shuffled_train[i * 4 : (i + 1) * 4]
+                    four = []
+                    for img_path, lbl_path in group:
+                        im = _imread_unicode(img_path)
+                        line = lbl_path.read_text(encoding="utf-8").strip()
+                        if not line:
+                            break
+                        four.append((im, line))
+                    if len(four) == 4 and _create_mosaic_pose(four, img_out, lbl_out, i + 1, image_size):
+                        if step_log and (i + 1) % PROGRESS_INTERVAL == 0:
+                            step_log(f"  mosaic: {i + 1}/{n_mosaic}")
+                if step_log:
+                    step_log(f"  mosaic: {n_mosaic}/{n_mosaic} concluído.")
+        if step_log:
+            step_log("Gerando data.yaml...")
+        data_yaml = {
+            **base_yaml,
+            "path": str(out.resolve()),
+            "train": "train/images",
+            "val": "val/images",
+            "test": "test/images",
+        }
+        (out / "data.yaml").write_text(
+            yaml.dump(data_yaml, default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        if step_log:
+            step_log(f"data.yaml gerado em {out}. Concluído: train/val/test disjuntos (sem vazamento).")
+        counts = {
+            "n_train": len(train_f),
+            "n_val": len(val_f),
+            "n_test": len(test_f),
+            "n_total": n_total,
+            "k_folds": 1,
+            "n_groups": n_groups,
+            "strategy": "stratified_per_group",
+        }
+        return out / "train", out / "val", out / "test", counts
+
+    # Estratificado já tratado; abaixo: split global (random) ou group_kfold
+    n_test = int(n_total * test_ratio)
+    shuffled = list(files)
+    random.shuffle(shuffled)
+    test_f = shuffled[:n_test]
+    train_val_f = shuffled[n_test:]
+    groups = [_group_from_stem(img.stem) for img, _ in train_val_f]
 
     if k_folds > 1 and strategy == "group_kfold" and n_groups >= k_folds:
         try:
@@ -155,14 +454,20 @@ def prepare_pose_dataset(
                     lbl_out = fold_dir / name / "labels"
                     img_out.mkdir(parents=True, exist_ok=True)
                     lbl_out.mkdir(parents=True, exist_ok=True)
-                    for img, lbl in split_list:
+                    total = len(split_list)
+                    if step_log:
+                        step_log(f"Fold {fold_idx + 1}: copiando {total} arquivos para {name}/...")
+                    for i, (img, lbl) in enumerate(split_list):
                         shutil.copy2(img, img_out / img.name)
                         shutil.copy2(lbl, lbl_out / lbl.name)
-                        if step_log:
-                            step_log(f"Copiando imagem {img.name} para {name}. Resultado: sucesso")
+                        if step_log and (i + 1) % 100 == 0:
+                            step_log(f"  fold_{fold_idx + 1} {name}: {i + 1}/{total}")
                     if name == "train" and train_augment_copies > 0:
-                        for img, lbl in split_list:
-                            n_copies = _apply_train_augmentation(
+                        offline_transform = get_offline_pose_augmentation()
+                        if step_log:
+                            step_log(f"Fold {fold_idx + 1}: augmentation em train (todas as planejadas)...")
+                        for i, (img, lbl) in enumerate(split_list):
+                            _apply_train_augmentation(
                                 img_out / img.name,
                                 lbl_out / lbl.name,
                                 img_out,
@@ -170,9 +475,31 @@ def prepare_pose_dataset(
                                 train_augment_copies,
                                 contrast_limit,
                                 gaussian_noise_std,
+                                transform=offline_transform,
                             )
-                            if step_log:
-                                step_log(f"Aplicando augmentation em {img.name}. Resultado: {n_copies} cópias geradas")
+                            if step_log and (i + 1) % 100 == 0:
+                                step_log(f"  fold_{fold_idx + 1} augmentation: {i + 1}/{total}")
+                    if name == "train" and mosaic_enabled and len(split_list) >= 4:
+                        n_mosaic = len(split_list) // 4
+                        shuffled_train = list(split_list)
+                        random.shuffle(shuffled_train)
+                        if step_log:
+                            step_log(f"Fold {fold_idx + 1}: gerando {n_mosaic} mosaic (todo o conjunto)...")
+                        for i in range(n_mosaic):
+                            group = shuffled_train[i * 4 : (i + 1) * 4]
+                            four = []
+                            for img_path, lbl_path in group:
+                                im = _imread_unicode(img_path)
+                                line = lbl_path.read_text(encoding="utf-8").strip()
+                                if not line:
+                                    break
+                                four.append((im, line))
+                            if len(four) == 4:
+                                _create_mosaic_pose(four, img_out, lbl_out, i + 1, image_size)
+                            if step_log and (i + 1) % 100 == 0:
+                                step_log(f"  fold_{fold_idx + 1} mosaic: {i + 1}/{n_mosaic}")
+                        if step_log:
+                            step_log(f"  fold_{fold_idx + 1} mosaic: {n_mosaic}/{n_mosaic} concluído.")
                 test_dir = fold_dir / "test"
                 (test_dir / "images").mkdir(parents=True, exist_ok=True)
                 (test_dir / "labels").mkdir(parents=True, exist_ok=True)
@@ -208,19 +535,29 @@ def prepare_pose_dataset(
     train_f = train_val_f[:n_train]
     val_f = train_val_f[n_train:]
     if k_folds <= 1 or n_groups < k_folds:
+        if step_log:
+            step_log(f"Split único: Train={len(train_f)}, Val={len(val_f)}, Test={len(test_f)}. Copiando...")
         for split_list, name in [(train_f, "train"), (val_f, "val"), (test_f, "test")]:
             img_out = out / name / "images"
             lbl_out = out / name / "labels"
             img_out.mkdir(parents=True, exist_ok=True)
             lbl_out.mkdir(parents=True, exist_ok=True)
-            for img, lbl in split_list:
+            total = len(split_list)
+            if step_log:
+                step_log(f"Copiando {total} arquivos para {name}/...")
+            for i, (img, lbl) in enumerate(split_list):
                 shutil.copy2(img, img_out / img.name)
                 shutil.copy2(lbl, lbl_out / lbl.name)
-                if step_log:
-                    step_log(f"Copiando imagem {img.name} para {name}. Resultado: sucesso")
+                if step_log and (i + 1) % 100 == 0:
+                    step_log(f"  {name}: {i + 1}/{total}")
+            if step_log:
+                step_log(f"  {name}: {total}/{total} concluído.")
             if name == "train" and train_augment_copies > 0:
-                for img, lbl in split_list:
-                    n_copies = _apply_train_augmentation(
+                offline_transform = get_offline_pose_augmentation()
+                if step_log:
+                    step_log("Aplicando todas as augmentations planejadas em train...")
+                for i, (img, lbl) in enumerate(split_list):
+                    _apply_train_augmentation(
                         img_out / img.name,
                         lbl_out / lbl.name,
                         img_out,
@@ -228,9 +565,33 @@ def prepare_pose_dataset(
                         train_augment_copies,
                         contrast_limit,
                         gaussian_noise_std,
+                        transform=offline_transform,
                     )
-                    if step_log:
-                        step_log(f"Aplicando augmentation em {img.name}. Resultado: {n_copies} cópias geradas")
+                    if step_log and (i + 1) % 100 == 0:
+                        step_log(f"  augmentation: {i + 1}/{total}")
+                if step_log:
+                    step_log(f"  augmentation: {total}/{total} concluído.")
+            if name == "train" and mosaic_enabled and len(split_list) >= 4:
+                n_mosaic = len(split_list) // 4
+                shuffled_train = list(split_list)
+                random.shuffle(shuffled_train)
+                if step_log:
+                    step_log(f"Gerando {n_mosaic} imagens mosaic em train/ (todo o conjunto)...")
+                for i in range(n_mosaic):
+                    group = shuffled_train[i * 4 : (i + 1) * 4]
+                    four = []
+                    for img_path, lbl_path in group:
+                        im = _imread_unicode(img_path)
+                        line = lbl_path.read_text(encoding="utf-8").strip()
+                        if not line:
+                            break
+                        four.append((im, line))
+                    if len(four) == 4:
+                        _create_mosaic_pose(four, img_out, lbl_out, i + 1, image_size)
+                if step_log:
+                    step_log(f"  mosaic: {n_mosaic} concluído.")
+        if step_log:
+            step_log("Gerando data.yaml...")
         data_yaml = {
             **base_yaml,
             "path": str(out.resolve()),
@@ -243,7 +604,7 @@ def prepare_pose_dataset(
             encoding="utf-8",
         )
         if step_log:
-            step_log(f"data.yaml gerado em {out}")
+            step_log(f"data.yaml gerado em {out}. Concluído.")
 
     counts = {
         "n_train": len(train_f),
