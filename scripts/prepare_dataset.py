@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.data.prepare_dataset import prepare_pose_dataset
+from src.data.prepare_dataset import prepare_classification_split, prepare_pose_dataset
 from src.utils.metrics_logger import create_step_logger
 
 
@@ -27,10 +27,20 @@ def main() -> None:
     log_and_print(f"Val:   {val}")
     log_and_print(f"Test:  {test}")
 
+    result = prepare_classification_split(step_log=log_and_print)
+    if result is not None:
+        class_split_path, class_counts = result
+        log_and_print(f"Classificação split: {class_split_path} (train={class_counts.get('n_train', 0)}, val={class_counts.get('n_val', 0)}, test={class_counts.get('n_test', 0)})")
+        counts["classification_n_train"] = class_counts.get("n_train", 0)
+        counts["classification_n_val"] = class_counts.get("n_val", 0)
+        counts["classification_n_test"] = class_counts.get("n_test", 0)
+    else:
+        log_and_print("Pasta data/unified/classification não encontrada; split de classificação omitido.")
+
     metrics = dict(counts)
     log_path = logger.finalize(metrics)
     print(f"Log e métricas salvos em: {log_path}")
-    print("Concluído. data.yaml gerado em data/unified/yolo_pose/")
+    print("Concluído. Pose: data/unified/yolo_pose/. Classificação: data/unified/classification_split/ (train/val/test).")
 
 
 if __name__ == "__main__":

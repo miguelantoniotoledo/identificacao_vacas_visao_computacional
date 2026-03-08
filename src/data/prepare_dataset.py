@@ -235,6 +235,78 @@ def _create_mosaic_pose(
     return False
 
 
+def prepare_classification_split(
+    unified_dir: Optional[Path] = None,
+    step_log: Optional[Callable[[str], None]] = None,
+) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """
+    Cria split 80/10/10 (train/val/test) para classificação, por pasta (uma classe por vaca).
+    Entrada: data/unified/classification/<nome_vaca>/*.jpg
+    Saída:   data/unified/classification_split/train/<nome_vaca>/, val/..., test/...
+    Usa os mesmos train_ratio, val_ratio, test_ratio e random_seed do config.
+    Retorna (classification_split_path, counts) ou None se pasta classification não existir.
+    """
+    cfg = get_full_config()
+    root = Path(__file__).resolve().parents[2]
+    unified = unified_dir or root / cfg.get("paths", {}).get("unified_dir", "data/unified")
+    data_cfg = cfg.get("data", {})
+    class_dir = unified / "classification"
+    if not class_dir.exists():
+        return None
+
+    seed = data_cfg.get("random_seed", 42)
+    train_ratio = data_cfg.get("train_ratio", 0.8)
+    val_ratio = data_cfg.get("val_ratio", 0.1)
+    test_ratio = data_cfg.get("test_ratio", 0.1)
+    # normalizar para somar 1
+    total_r = train_ratio + val_ratio + test_ratio
+    if total_r <= 0:
+        total_r = 1.0
+    train_ratio, val_ratio, test_ratio = train_ratio / total_r, val_ratio / total_r, test_ratio / total_r
+
+    out = unified / "classification_split"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "train").mkdir(exist_ok=True)
+    (out / "val").mkdir(exist_ok=True)
+    (out / "test").mkdir(exist_ok=True)
+
+    random.seed(seed)
+    n_train, n_val, n_test = 0, 0, 0
+    cow_folders = [d for d in class_dir.iterdir() if d.is_dir()]
+    if step_log:
+        step_log(f"Split classificação: {len(cow_folders)} classes (vacas). Ratios: 80% train, 10% val, 10% test por pasta.")
+
+    for cow_dir in cow_folders:
+        cow_name = cow_dir.name
+        images = _get_image_files(cow_dir)
+        if not images:
+            continue
+        random.shuffle(images)
+        n = len(images)
+        n_t = max(0, int(round(n * train_ratio)))
+        n_v = max(0, int(round(n * val_ratio)))
+        n_te = n - n_t - n_v
+        if n_te < 0:
+            n_te = 0
+            n_t = n - n_v
+        train_list = images[:n_t]
+        val_list = images[n_t : n_t + n_v]
+        test_list = images[n_t + n_v :]
+        for split_name, img_list in [("train", train_list), ("val", val_list), ("test", test_list)]:
+            dest = out / split_name / cow_name
+            dest.mkdir(parents=True, exist_ok=True)
+            for img in img_list:
+                shutil.copy2(img, dest / img.name)
+        n_train += len(train_list)
+        n_val += len(val_list)
+        n_test += len(test_list)
+
+    if step_log:
+        step_log(f"Classificação split: train={n_train}, val={n_val}, test={n_test}. Salvo em {out}.")
+    counts = {"n_train": n_train, "n_val": n_val, "n_test": n_test, "n_classes": len(cow_folders)}
+    return (out, counts)
+
+
 def prepare_pose_dataset(
     unified_dir: Optional[Path] = None,
     step_log: Optional[Callable[[str], None]] = None,

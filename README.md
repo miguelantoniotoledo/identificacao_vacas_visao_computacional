@@ -132,7 +132,13 @@ python scripts/unify_and_convert.py
 python scripts/prepare_dataset.py
 ```
 
-Por padrão usa **stratified_per_group**: em cada pasta, **80% treino**, **10% validação** e **10% teste** (conjuntos disjuntos). Config: `data.train_ratio: 0.8`, `data.val_ratio: 0.1`, `data.split_test_ratio: 0.1`.
+- **Pose (keypoints):** stratified_per_group em cada grupo: **80% train**, **10% val**, **10% test** em `data/unified/yolo_pose/` (train/images, val/images, test/images).
+- **Classificação:** se existir `data/unified/classification/`, o mesmo script gera **split 80-10-10** em `data/unified/classification_split/`:
+  - **train/** — treino do classificador (80% das fotos de cada vaca)
+  - **val/** — validação durante o treino e para rodar o validador (10%)
+  - **test/** — teste hold-out, nunca usado no treino (10%)
+
+Use as mesmas proporções do config: `data.train_ratio: 0.8`, `data.val_ratio: 0.1`, `data.test_ratio: 0.1`.
 
 #### 3.3. Treinar modelo de keypoints
 
@@ -143,19 +149,85 @@ python scripts/train_keypoints.py
 - Usa YOLOv8-pose
 - Treino em GPU (configurável em `config.yaml` → `training.device`)
 - Augmentation automático pelo Ultralytics
-- Se existir **k-fold** (group k-fold por pasta, em `data/unified/yolo_pose/fold_1/`, …), treina um modelo por fold e escolhe o melhor por mAP50-95; o `best.pt` do melhor fold é copiado para `outputs/keypoints/train/weights/best.pt` para inferência
+- Se existir **k-fold** (group k-fold por pasta, em `data/unified/yolo_pose/fold_1/`, …), treina um modelo por fold e escolhe o melhor por mAP50-95; o `best.pt` do melhor fold é copiado para `outputs/keypoints/train/weights/best.pt` para inferência.
+
+**Estatísticas comparativas entre folds**
+
+Quando o treino roda em modo k-fold (ex.: 5 folds), o script gera:
+
+- **No log e no JSON de métricas** (`outputs/statistics/train_keypoints_latest.json`):
+  - `fold_metrics`: lista `[{ "fold": 1, "mAP50_95": 0.78 }, ...]` com o mAP50-95 de cada fold.
+  - `fold_comparison`: resumo com `mAP50_95_mean`, `mAP50_95_std`, `mAP50_95_min`, `mAP50_95_max` e `fold_summary` (tabela por fold).
+- **Relatório em Markdown** em `outputs/statistics/train_keypoints_folds.md`:
+  - Qual foi o melhor fold e seu mAP50-95.
+  - Média, desvio, mínimo e máximo do mAP50-95 entre folds.
+  - Tabela | Fold | mAP50-95 | para comparação rápida.
+
+Use esse comparativo para ver a variância entre folds e se algum fold ficou muito atrás (possível problema de split ou dados).
 
 #### 3.3.1. Avaliar o modelo de keypoints no conjunto de **teste**
 
-O split 80/10/10 coloca 10% de cada pasta em **teste** (`data/unified/yolo_pose/test/`). Essas imagens **não são usadas no treino nem na validação**. Para obter as métricas finais no hold-out de teste:
+O split 80/10/10 coloca 10% de cada pasta em **teste** (`data/unified/yolo_pose/test/`). Essas imagens **não são usadas no treino nem na validação**. Para obter as métricas finais e as losses de avaliação no hold-out de teste:
+
+**Como executar**
 
 ```powershell
+# Avaliação completa (métricas Ultralytics + losses por amostra)
 python scripts/evaluate_keypoints.py
 ```
 
-- Usa por padrão o modelo `outputs/keypoints/train/weights/best.pt` e o `data.yaml` em `data/unified/yolo_pose/` (que aponta `test` para `test/images`).
-- Para outro modelo: `python scripts/evaluate_keypoints.py --weights caminho/para/best.pt`
-- As métricas impressas (mAP, precisão, recall, etc.) são as do **conjunto de teste**, ou seja, a estimativa de desempenho em dados nunca vistos no treino.
+- **Modelo:** por padrão usa `outputs/keypoints/train/weights/best.pt`. Para outro arquivo:
+  ```powershell
+  python scripts/evaluate_keypoints.py --weights caminho/para/best.pt
+  ```
+- **Apenas métricas oficiais** (mAP, precisão, recall), sem calcular as losses:
+  ```powershell
+  python scripts/evaluate_keypoints.py --no-losses
+  ```
+
+**Resultados esperados**
+
+1. **Métricas no TESTE (Ultralytics)** — saída no terminal e via `model.val(split="test")`:
+   - `metrics/pose_P`, `metrics/pose_R`: precisão e recall (pose).
+   - `metrics/pose_mAP50`, `metrics/pose_mAP50-95`: mAP em IoU 0,5 e média em 0,5:0,95.
+   - Outras métricas de detecção/pose conforme a versão do Ultralytics.
+
+2. **Losses de avaliação** (média sobre amostras com predição e GT):
+   - **IoU loss** (1 − IoU das caixas): quanto menor, melhor alinhamento das bbox.
+   - **MSE loss** (L2 nos keypoints): erro quadrático médio nas coordenadas.
+   - **L1 loss** (L1 nos keypoints): erro absoluto médio nas coordenadas.
+   - **Cross entropy** (confiança vs. visibilidade): qualidade da confiança por keypoint.
+   - **Focal loss** (confiança vs. visibilidade): mesma ideia, com foco em exemplos difíceis.
+   - **Heatmap loss** (MSE entre heatmaps): comparação em espaço de mapas de calor.
+
+Exemplo de saída no terminal:
+
+```
+Avaliando no conjunto de TESTE (hold-out).
+  Modelo: outputs/keypoints/train/weights/best.pt
+  Data:   data/unified/yolo_pose/data.yaml
+  Split:  test | imgsz: 640
+
+Métricas no TESTE (Ultralytics):
+  metrics/pose_P: 0.9234
+  metrics/pose_R: 0.8901
+  metrics/pose_mAP50: 0.9123
+  metrics/pose_mAP50-95: 0.7845
+  ...
+
+Losses de avaliação no TESTE (média sobre amostras com predição e GT):
+  Amostras: 150 (omitidas: 2)
+  IoU loss       (1 - IoU bbox): 0.052341
+  MSE loss       (L2 keypoints): 12.345678
+  L1 loss        (L1 keypoints): 2.123456
+  Cross entropy  (conf vs vis):  0.234567
+  Focal loss     (conf vs vis):  0.123456
+  Heatmap loss   (MSE heatmaps):  0.012345
+
+Concluído. Use essas métricas e losses como desempenho final no teste.
+```
+
+As losses são calculadas por imagem (predição com maior IoU em relação ao GT) e depois é feita a média. Amostras sem predição ou sem label são omitidas da média.
 
 #### 3.4. Treinar classificador de vacas
 
@@ -163,8 +235,29 @@ python scripts/evaluate_keypoints.py
 python scripts/train_classifier.py
 ```
 
-- Usa YOLOv8-cls
-- Uma classe por pasta em `raw/classificacao/<nome_vaca>/`
+- Usa YOLOv8-cls; uma classe por vaca.
+- Se existir `data/unified/classification_split/` (criado por `prepare_dataset`), o treino usa **train/** para treino e **val/** para validação (early stopping e métricas). Caso contrário, usa `data/unified/classification/` e o Ultralytics faz um split interno.
+
+#### 3.4.1. Validar o classificador (acurácia)
+
+O **validador** (`evaluate_classifier.py`) compara a predição do modelo com o rótulo verdadeiro e calcula top-1 e top-5 accuracy. **Não é o mesmo que** `predict_cow.py` (ver abaixo).
+
+**Qual pasta usar para validar**
+
+- Se você rodou `prepare_dataset` e existe `data/unified/classification_split/`:
+  - **Validação (durante/após o treino):** use a pasta **val** → `python scripts/evaluate_classifier.py --split val`
+  - **Teste hold-out (desempenho final):** use a pasta **test** → `python scripts/evaluate_classifier.py --split test`
+- Se não existir `classification_split/`, o script usa `data/unified/classification/` (comportamento antigo).
+
+```powershell
+python scripts/evaluate_classifier.py              # padrão: --split val
+python scripts/evaluate_classifier.py --split val   # métricas na validação (10% dos dados)
+python scripts/evaluate_classifier.py --split test # métricas no teste hold-out (10% dos dados)
+python scripts/evaluate_classifier.py --weights caminho/para/best.pt
+```
+
+- **Métricas:** `top1_acc` (acurácia: a classe com maior confiança é a correta) e `top5_acc` (a classe correta está no top-5).
+- Log e métricas em `outputs/logs/` e `outputs/statistics/evaluate_classifier_latest.json`.
 
 #### 3.5. Visualizar keypoints e retas entre pontos
 
@@ -186,9 +279,18 @@ python scripts/analisar_features.py
 - Gera estatísticas descritivas, histogramas, matriz de correlação e projeção PCA 2D
 - Salva gráficos e relatório em `outputs/statistics/eda/` (`distribuicoes_features.png`, `correlacao_features.png`, `pca_2d.png`, `relatorio_eda.md`)
 
-## Inferência (uso dos modelos treinados)
+## Inferência e validação
 
-### Classificar qual vaca está na imagem
+### predict_cow.py vs evaluate_classifier.py
+
+| Script | Função | Quando usar |
+|--------|--------|-------------|
+| **predict_cow.py** | **Inferência:** classifica imagens **sem rótulo** (novas fotos). Só prediz a vaca e a confiança; não calcula acurácia. | Quando você tem imagens novas e quer saber “qual vaca é?”. |
+| **evaluate_classifier.py** | **Validador:** usa imagens **com rótulo** (pastas val/ ou test/ do split), compara predição com o rótulo e calcula **top-1 e top-5 accuracy**. | Quando você quer medir o desempenho do modelo (validação ou teste hold-out). |
+
+Ou seja: **predict_cow** não é validador; é para uso em produção ou em imagens não anotadas. Para **validar** (acurácia), use **evaluate_classifier** com `--split val` ou `--split test`.
+
+### Classificar qual vaca está na imagem (inferência)
 
 ```powershell
 python scripts/predict_cow.py --image caminho/para/imagem.jpg
@@ -238,6 +340,7 @@ Cada vez que um script roda, são gravados:
   - `<nome_script>_<timestamp>.json` e `<nome_script>_latest.json` (última execução).
 - **Gráficos** em `outputs/statistics/`:
   - Nos treinos (keypoints e classificador), curvas de loss/métricas em PNG (ex.: `train_keypoints_curves.png`, `train_classifier_curves.png`).
+- **Treino keypoints com k-fold:** além do JSON, é gerado `outputs/statistics/train_keypoints_folds.md` com o **comparativo entre folds** (tabela | Fold | mAP50-95 |, média, desvio, mínimo e máximo). O JSON inclui `fold_metrics` e `fold_comparison`.
 
 O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 
@@ -264,7 +367,8 @@ O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 │   └── unified/            # Dados unificados e convertidos
 │       ├── keypoints/
 │       ├── classification/
-│       └── yolo_pose/      # Splits para treino
+│       ├── classification_split/  # train/val/test 80-10-10 (criado por prepare_dataset)
+│       └── yolo_pose/      # Splits para treino (pose)
 ├── models/
 ├── outputs/
 │   ├── logs/              # Logs de cada script e pipeline_run_<timestamp>.log
@@ -286,6 +390,7 @@ O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 │   ├── train_keypoints.py
 │   ├── evaluate_keypoints.py   # avaliar keypoints no conjunto de teste
 │   ├── train_classifier.py
+│   ├── evaluate_classifier.py # validar classificador (top-1 / top-5 acc)
 │   ├── visualize_keypoints.py
 │   ├── predict_cow.py
 │   └── predict_keypoints.py

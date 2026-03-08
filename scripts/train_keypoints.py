@@ -13,11 +13,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import numpy as np
+
 from src.config import get_full_config
 from src.utils.metrics_logger import (
     create_step_logger,
     extract_yolo_metrics_and_plot,
+    get_statistics_dir,
 )
+
+
+POSE_WEIGHTS = "yolov8n-pose.pt"
+
+
+def _ensure_model_override(model, weights: str = POSE_WEIGHTS) -> None:
+    """Garante que model.overrides tenha 'model' (exigido pelo Ultralytics após o 1º fold)."""
+    if "model" not in getattr(model, "overrides", {}):
+        model.overrides["model"] = weights
 
 
 def _get_best_map50_95(results_csv: Path) -> float:
@@ -72,6 +84,8 @@ def main() -> None:
         logger.log(f"Device de treino (config): {device}")
     epochs = training.get("epochs", 100)
     batch = training.get("batch_size", 16)
+    lr0 = training.get("lr0", 0.01)
+    lrf = training.get("lrf", 0.01)
     patience = training.get("patience", 20)  # early stopping: para se val não melhorar em N épocas
     workers = training.get("workers", 4)
     logger.log(f"Early stopping: patience={patience} épocas (treino interrompe se val não melhorar)")
@@ -90,18 +104,22 @@ def main() -> None:
 
     if fold_data_yamls:
         logger.log("Modo k-fold. Iniciando treino por fold.")
-        model = YOLO("yolov8n-pose.pt")
         best_fold = None
         best_mAP = 0.0
         fold_metrics = []
         for fold_i, data_yaml in fold_data_yamls:
             logger.log(f"Treinando fold {fold_i}/{len(fold_data_yamls)}. Resultado: iniciado")
+            # Novo modelo a cada fold para evitar estado corrompido após train() (KeyError 'model' ou falha no 2º fold)
+            model = YOLO(POSE_WEIGHTS)
+            _ensure_model_override(model)
             model.train(
                 data=str(data_yaml),
                 epochs=epochs,
                 batch=batch,
                 imgsz=imgsz,
                 device=device,
+                lr0=lr0,
+                lrf=lrf,
                 patience=patience,
                 workers=workers,
                 project=str(keypoints_out),
@@ -123,7 +141,49 @@ def main() -> None:
             if src_best.exists():
                 shutil.copy2(src_best, train_weights / "best.pt")
                 logger.log(f"Melhor fold: {best_fold} (mAP50-95={best_mAP:.4f}). Copiando best.pt para train/weights. Resultado: sucesso")
-        metrics = {"epochs": epochs, "batch_size": batch, "imgsz": imgsz, "device": device, "k_folds": len(fold_data_yamls), "best_fold": best_fold, "best_mAP50_95": best_mAP, "fold_metrics": fold_metrics}
+
+        # Estatísticas comparativas entre folds
+        maps = [m["mAP50_95"] for m in fold_metrics]
+        fold_comparison = {
+            "mAP50_95_mean": float(np.mean(maps)),
+            "mAP50_95_std": float(np.std(maps)) if len(maps) > 1 else 0.0,
+            "mAP50_95_min": float(np.min(maps)),
+            "mAP50_95_max": float(np.max(maps)),
+            "fold_summary": [{"fold": m["fold"], "mAP50_95": m["mAP50_95"]} for m in fold_metrics],
+        }
+        logger.log(
+            f"Folds: mAP50-95 média={fold_comparison['mAP50_95_mean']:.4f}, "
+            f"std={fold_comparison['mAP50_95_std']:.4f}, min={fold_comparison['mAP50_95_min']:.4f}, max={fold_comparison['mAP50_95_max']:.4f}"
+        )
+        stats_dir = get_statistics_dir(root)
+        stats_dir.mkdir(parents=True, exist_ok=True)
+        report_path = stats_dir / "train_keypoints_folds.md"
+        report_lines = [
+            "# Comparativo entre folds (treino keypoints)",
+            "",
+            f"- **Melhor fold:** {best_fold} (mAP50-95 = {best_mAP:.4f})",
+            f"- **Média:** {fold_comparison['mAP50_95_mean']:.4f} | **Desvio:** {fold_comparison['mAP50_95_std']:.4f} | **Mín:** {fold_comparison['mAP50_95_min']:.4f} | **Máx:** {fold_comparison['mAP50_95_max']:.4f}",
+            "",
+            "| Fold | mAP50-95 |",
+            "|------|---------|",
+        ]
+        for m in fold_metrics:
+            report_lines.append(f"| {m['fold']} | {m['mAP50_95']:.4f} |")
+        report_lines.append("")
+        report_path.write_text("\n".join(report_lines), encoding="utf-8")
+        logger.log(f"Relatório comparativo dos folds salvo em: {report_path.relative_to(root)}")
+
+        metrics = {
+            "epochs": epochs,
+            "batch_size": batch,
+            "imgsz": imgsz,
+            "device": device,
+            "k_folds": len(fold_data_yamls),
+            "best_fold": best_fold,
+            "best_mAP50_95": best_mAP,
+            "fold_metrics": fold_metrics,
+            "fold_comparison": fold_comparison,
+        }
     else:
         data_yaml = yolo_pose_dir / "data.yaml"
         if not data_yaml.exists():
@@ -134,13 +194,16 @@ def main() -> None:
             sys.exit(1)
         logger.log("Treino único. Iniciando treino keypoints.")
         run_dir = keypoints_out / "train"
-        model = YOLO("yolov8n-pose.pt")
+        model = YOLO(POSE_WEIGHTS)
+        _ensure_model_override(model)
         model.train(
             data=str(data_yaml),
             epochs=epochs,
             batch=batch,
             imgsz=imgsz,
             device=device,
+            lr0=lr0,
+            lrf=lrf,
             patience=patience,
             workers=workers,
             project=str(keypoints_out),

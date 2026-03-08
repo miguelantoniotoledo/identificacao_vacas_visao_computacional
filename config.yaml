@@ -52,8 +52,14 @@ augmentation:
 # Treino YOLO
 training:
   device: "0"  # GPU (0, 1, ...) ou "cpu"
-  epochs: 200
+  epochs: 5
   batch_size: 16
+  # Classificador: usa imagens menores (224) e batch menor para reduzir uso de GPU
+  classifier_batch_size: 16
+  classifier_imgsz: 640
+  # Learning rate: lr0 = inicial, lrf = fator do LR final (LR_final = lr0 * lrf)
+  lr0: 0.01
+  lrf: 0.01
   # Early stopping: interrompe se a métrica de validação não melhorar em N épocas
   patience: 20
   workers: 4
