@@ -39,6 +39,22 @@ raw/catalogo, raw/classificacao
 
 Ao final, o pipeline grava um **log consolidado** em `outputs/logs/pipeline_run_<timestamp>.log` com data/hora de cada evento e estatísticas dos scripts.
 
+### Resumo: instruções, resultado esperado e localização
+
+| Script | Comando principal | Resultado esperado | Localização do resultado |
+|--------|-------------------|-------------------|--------------------------|
+| **unify_and_convert** | `python scripts/unify_and_convert.py` | Terminal: contagem de anotações convertidas e falhas. | `data/unified/keypoints/images/`, `data/unified/keypoints/labels/`, `data/unified/classification/<vaca>/`; métricas: `outputs/statistics/unify_and_convert_latest.json` |
+| **prepare_dataset** | `python scripts/prepare_dataset.py` | Terminal: contagem train/val/test e confirmação de data.yaml. | Pose: `data/unified/yolo_pose/train/`, `val/`, `test/` (ou `fold_1/`…`fold_N/`); classificação: `data/unified/classification_split/train/`, `val/`, `test/` |
+| **analisar_features** | `python scripts/analisar_features.py` | Terminal: top features e confirmação de arquivos gerados. | `outputs/statistics/eda/` (histogramas, correlação, PCA, `relatorio_eda.md`) |
+| **train_keypoints** | `python scripts/train_keypoints.py` | Terminal: progresso por época; ao final, melhor fold e mAP50-95. | Modelo: `outputs/keypoints/train/weights/best.pt`; por fold: `outputs/keypoints/fold_N/`; estatísticas: `outputs/statistics/train_keypoints_folds.md`, `train_keypoints_latest.json` |
+| **train_classifier** | `python scripts/train_classifier.py` | Terminal: progresso por época e métricas de validação. | Modelo: `outputs/classifier/train/weights/best.pt`; curvas: `outputs/statistics/`; logs: `outputs/logs/` |
+| **visualize_keypoints** | `python scripts/visualize_keypoints.py` | Terminal: confirmação de imagens geradas. | `outputs/vis/keypoints/` (imagens com keypoints e segmentos) |
+| **evaluate_keypoints** | `python scripts/evaluate_keypoints.py` (+ `--image path` para uma imagem) | Terminal: mAP (OKS), **PCK e distância média (px)** e losses. mAP50 é baseado em OKS; para “proximidade visual” use PCK. | Logs e métricas em `outputs/logs/`, `outputs/statistics/` |
+| **evaluate_classifier** | `python scripts/evaluate_classifier.py --split val\|test` | Terminal: top-1 e top-5 accuracy. | `outputs/statistics/evaluate_classifier_latest.json`; logs: `outputs/logs/` |
+| **verificar_unify_convert** | `python scripts/verificar_unify_convert.py` (+ `--plot N` ou `--image path`) | Terminal: OK/FALHA por verificação; com `--plot`/`--image`: confirmação de imagens salvas. | Com `--plot N`: `outputs/statistics/verificar_unify_convert/amostra_*_<nome>.jpg`; com `--image path`: `outputs/statistics/verificar_unify_convert/<stem>_anotacoes_originais.jpg` |
+| **predict_cow** | `python scripts/predict_cow.py --image path` ou `--input-dir path` | Terminal: por imagem, classe(es) e confiança; com top-K, lista das K classes. | Imagens anotadas: `outputs/inference/classifier/pred/` |
+| **predict_keypoints** | `python scripts/predict_keypoints.py --image path` ou `--input-dir path` | Terminal: coordenadas dos keypoints por imagem (com nomes). Imagem com box "cow" e keypoints com nomes (withers, back, etc.). | Imagens: `outputs/inference/keypoints/pred/` (mesmo nome do arquivo de entrada quando uma única imagem) |
+
 ---
 
 ## Estrutura de dados esperada
@@ -104,9 +120,12 @@ python scripts/pipeline.py --skip-train-classifier --skip-visualize
 python scripts/unify_and_convert.py
 ```
 
-- Unifica pastas de `raw`
-- Converte anotações Label Studio → formato YOLO pose
-- Copia imagens para `data/unified/`
+- **O que faz:** unifica pastas de `raw`; converte anotações Label Studio (JSON) → formato YOLO pose; copia imagens para `data/unified/`.
+- **Resultado esperado:** no terminal, contagem de anotações keypoints convertidas e de imagens de classificação; sem erros, `failed` deve ser 0.
+- **Localização do resultado:**
+  - Keypoints: `data/unified/keypoints/images/` (imagens) e `data/unified/keypoints/labels/` (um `.txt` por imagem, formato YOLO pose).
+  - Classificação: `data/unified/classification/<nome_vaca>/` (imagens por vaca).
+  - Métricas do run: `outputs/statistics/unify_and_convert_latest.json` (`converted`, `failed`, etc.).
 
 **Como verificar se deu certo:**
 
@@ -118,10 +137,16 @@ python scripts/unify_and_convert.py
    ```powershell
    python scripts/verificar_unify_convert.py --amostras 5
    ```
-   Para plotar N imagens com **bbox e keypoints** desenhados (salvas em `outputs/statistics/verificar_unify_convert/`):
+   Para plotar N imagens com **bbox e keypoints** desenhados (anotações originais):
    ```powershell
    python scripts/verificar_unify_convert.py --plot 3
    ```
+   Para **uma imagem específica** (ex.: imagem em raw ou em yolo_pose), desenhar nela as anotações originais; o label é buscado em `data/unified/keypoints/labels/` pelo nome do arquivo (stem):
+   ```powershell
+   python scripts/verificar_unify_convert.py --image "caminho/para/imagem.jpg"
+   ```
+   - **Resultado esperado:** no terminal, `[OK]` ou `[FALHA]` por verificação; com `--plot N` ou `--image`, confirmação do caminho do arquivo salvo.
+   - **Localização do resultado:** com `--plot N`: `outputs/statistics/verificar_unify_convert/amostra_1_<nome>.jpg`, …; com `--image`: `outputs/statistics/verificar_unify_convert/<stem>_anotacoes_originais.jpg`.
    O script confere: pastas existem, mesmo número de imagens e labels, cada imagem tem um `.txt` com o mesmo nome (stem), formato do label (classe + bbox + 8 keypoints × 3) e compara com o último run em `outputs/statistics/unify_and_convert_latest.json`.
 
 2. **Verificação manual:** conferir que em `data/unified/keypoints/` existem `images/` e `labels/` com a mesma quantidade de arquivos; para uma imagem qualquer (ex.: `foto.jpg`) deve existir `foto.txt` em `labels/` com uma linha no formato YOLO pose (classe, 4 bbox, 24 valores de keypoints). Ver também o JSON do último run: `converted` deve bater com o total e `failed` deve ser 0.
@@ -132,11 +157,13 @@ python scripts/unify_and_convert.py
 python scripts/prepare_dataset.py
 ```
 
-- **Pose (keypoints):** stratified_per_group em cada grupo: **80% train**, **10% val**, **10% test** em `data/unified/yolo_pose/` (train/images, val/images, test/images).
-- **Classificação:** se existir `data/unified/classification/`, o mesmo script gera **split 80-10-10** em `data/unified/classification_split/`:
-  - **train/** — treino do classificador (80% das fotos de cada vaca)
-  - **val/** — validação durante o treino e para rodar o validador (10%)
-  - **test/** — teste hold-out, nunca usado no treino (10%)
+- **O que faz:**  
+  - **Pose (keypoints):** stratified_per_group em cada grupo: **80% train**, **10% val**, **10% test** em `data/unified/yolo_pose/` (train/images, val/images, test/images). Se `pose.k_folds` > 1, gera `fold_1/` … `fold_N/` com train/val/test por fold. Aplica augmentations e mosaic no treino; gera `data.yaml` em cada pasta.
+  - **Classificação:** se existir `data/unified/classification/`, gera **split 80-10-10** em `data/unified/classification_split/`: **train/**, **val/**, **test/** (uma pasta por vaca em cada).
+- **Resultado esperado:** no terminal, contagem de amostras em train/val/test e confirmação de geração do(s) `data.yaml`.
+- **Localização do resultado:**  
+  - Pose: `data/unified/yolo_pose/train/`, `val/`, `test/` (ou `data/unified/yolo_pose/fold_N/train/`, `val/`, `test/`).  
+  - Classificação: `data/unified/classification_split/train/<vaca>/`, `val/<vaca>/`, `test/<vaca>/`.
 
 Use as mesmas proporções do config: `data.train_ratio: 0.8`, `data.val_ratio: 0.1`, `data.test_ratio: 0.1`.
 
@@ -146,10 +173,12 @@ Use as mesmas proporções do config: `data.train_ratio: 0.8`, `data.val_ratio: 
 python scripts/train_keypoints.py
 ```
 
-- Usa YOLOv8-pose
-- Treino em GPU (configurável em `config.yaml` → `training.device`)
-- Augmentation automático pelo Ultralytics
-- Se existir **k-fold** (group k-fold por pasta, em `data/unified/yolo_pose/fold_1/`, …), treina um modelo por fold e escolhe o melhor por mAP50-95; o `best.pt` do melhor fold é copiado para `outputs/keypoints/train/weights/best.pt` para inferência.
+- **O que faz:** treina YOLOv8-pose; usa GPU (configurável em `config.yaml` → `training.device`); augmentation automático pelo Ultralytics; early stopping (patience). Se existir **k-fold** em `data/unified/yolo_pose/fold_1/` … `fold_N/`, treina um modelo por fold e escolhe o melhor por mAP50-95; o `best.pt` do melhor fold é copiado para `outputs/keypoints/train/weights/best.pt`.
+- **Resultado esperado:** no terminal, progresso por época (loss, mAP); ao final, mensagem de conclusão e, em k-fold, qual fold foi o melhor e seu mAP50-95.
+- **Localização do resultado:**  
+  - Modelo principal: `outputs/keypoints/train/weights/best.pt` (e `last.pt`).  
+  - Por fold: `outputs/keypoints/fold_N/weights/best.pt`, `results.csv`, gráficos.  
+  - Estatísticas: `outputs/statistics/train_keypoints_folds.md`, `outputs/statistics/train_keypoints_latest.json`; logs: `outputs/logs/`.
 
 **Estatísticas comparativas entre folds**
 
@@ -229,14 +258,37 @@ Concluído. Use essas métricas e losses como desempenho final no teste.
 
 As losses são calculadas por imagem (predição com maior IoU em relação ao GT) e depois é feita a média. Amostras sem predição ou sem label são omitidas da média.
 
+**Localização do resultado:** logs em `outputs/logs/`; métricas em `outputs/statistics/` (conforme gravado pelo script de avaliação).
+
+**mAP50 (OKS) vs “acuracia visual”:** as métricas mAP50 e Precision/Recall do Ultralytics usam **OKS** (Object Keypoint Similarity), que depende da escala do animal: um mesmo erro em pixels pode ser “correto” em OKS em imagens grandes. Por isso um mAP50 alto (ex.: 93%) pode não corresponder a pontos muito próximos do GT. O script agora calcula também **PCK** (Percentage of Correct Keypoints: % de pontos com distância ≤ 20px ou ≤ 30px) e **distância média em pixels**; use essas métricas para avaliar a proximidade real pred vs anotação. Para uma única imagem: `python scripts/evaluate_keypoints.py --image "caminho/para/imagem.jpg"`.
+
+**O que significa cada métrica (keypoints/pose):**
+
+| Métrica | Significado (em uma frase) |
+|--------|-----------------------------|
+| **mAP50 (P)** | mAP com limiar OKS = 0,5: em quantos % dos casos a predição é considerada "acerto" segundo OKS. Costuma ser alto (~99%); não reflete bem proximidade em pixels. |
+| **mAP50-95 (P)** | mAP médio com limiares OKS de 0,5 a 0,95 (mais exigente). Métrica padrão para comparar modelos de pose na literatura. |
+| **Precision (P)** | Das predições que o modelo deu como "positivas", quantas % passaram no limiar OKS (ex.: 0,5). |
+| **Recall (P)** | Dos ground truths, quantas % foram recuperadas com OKS acima do limiar. |
+| **OKS** | Object Keypoint Similarity: nota de 0 a 1 por detecção; considera distância pred↔GT e escala do animal (erro em px "permitido" é maior em animais maiores). |
+| **PCK@20px** | % de keypoints com distância ao GT ≤ 20 pixels. Reflete "proximidade real"; 60% = 60% dos pontos dentro de 20 px. |
+| **PCK@30px** | Idem com limiar de 30 px. |
+| **Distância média (px)** | Média da distância Euclidiana (em pixels) entre cada keypoint predito e o GT. Quanto menor, melhor. |
+| **IoU loss** | 1 − IoU das caixas (bbox). Quanto menor, melhor o alinhamento da caixa predita com a GT. |
+| **MSE loss** | Erro quadrático médio nas coordenadas (x,y) dos keypoints. Quanto menor, mais perto em L2. |
+| **L1 loss** | Erro absoluto médio nas coordenadas dos keypoints. Quanto menor, mais perto em L1. |
+| **Cross entropy / Focal** | Qualidade da confiança que o modelo atribui a cada keypoint (comparada à visibilidade no GT). |
+| **Heatmap loss** | Diferença entre os mapas de calor da predição e do GT (em espaço redimensionado). |
+
 #### 3.4. Treinar classificador de vacas
 
 ```powershell
 python scripts/train_classifier.py
 ```
 
-- Usa YOLOv8-cls; uma classe por vaca.
-- Se existir `data/unified/classification_split/` (criado por `prepare_dataset`), o treino usa **train/** para treino e **val/** para validação (early stopping e métricas). Caso contrário, usa `data/unified/classification/` e o Ultralytics faz um split interno.
+- **O que faz:** treina YOLOv8-cls (uma classe por vaca). Se existir `data/unified/classification_split/` (criado por `prepare_dataset`), usa **train/** e **val/**; caso contrário, usa `data/unified/classification/` com split interno. Early stopping e métricas de validação.
+- **Resultado esperado:** no terminal, progresso por época (loss, accuracy); ao final, confirmação de salvamento do modelo.
+- **Localização do resultado:** modelo em `outputs/classifier/train/weights/best.pt`; curvas e métricas em `outputs/statistics/`; logs em `outputs/logs/`.
 
 #### 3.4.1. Validar o classificador (acurácia)
 
@@ -256,8 +308,8 @@ python scripts/evaluate_classifier.py --split test # métricas no teste hold-out
 python scripts/evaluate_classifier.py --weights caminho/para/best.pt
 ```
 
-- **Métricas:** `top1_acc` (acurácia: a classe com maior confiança é a correta) e `top5_acc` (a classe correta está no top-5).
-- Log e métricas em `outputs/logs/` e `outputs/statistics/evaluate_classifier_latest.json`.
+- **Resultado esperado:** no terminal, top-1 e top-5 accuracy no split escolhido (val ou test).
+- **Localização do resultado:** métricas em `outputs/statistics/evaluate_classifier_latest.json`; logs em `outputs/logs/` (arquivo `evaluate_classifier_<timestamp>.log`).
 
 #### 3.5. Visualizar keypoints e retas entre pontos
 
@@ -265,9 +317,9 @@ python scripts/evaluate_classifier.py --weights caminho/para/best.pt
 python scripts/visualize_keypoints.py
 ```
 
-- Gera imagens anotadas em `outputs/vis/keypoints/` com:
-  - pontos anatômicos
-  - retas entre pontos (linha dorsal, garupa, etc.)
+- **O que faz:** lê imagens e labels (ou predições) e desenha pontos anatômicos e segmentos (linha dorsal, garupa, etc.) em cada imagem.
+- **Resultado esperado:** no terminal, confirmação da quantidade de imagens processadas e do diretório de saída.
+- **Localização do resultado:** imagens anotadas em `outputs/vis/keypoints/` (uma por imagem de entrada).
 
 #### 3.6. Análise exploratória (EDA) das features
 
@@ -275,9 +327,9 @@ python scripts/visualize_keypoints.py
 python scripts/analisar_features.py
 ```
 
-- Carrega os labels de keypoints em `data/unified/keypoints/labels`
-- Gera estatísticas descritivas, histogramas, matriz de correlação e projeção PCA 2D
-- Salva gráficos e relatório em `outputs/statistics/eda/` (`distribuicoes_features.png`, `correlacao_features.png`, `pca_2d.png`, `relatorio_eda.md`)
+- **O que faz:** carrega os labels de keypoints em `data/unified/keypoints/labels`, monta features geométricas (e opcionalmente de textura/cor), calcula importância (mutual_info, rf_importance ou PCA) e gera visualizações.
+- **Resultado esperado:** no terminal, listagem das top features e confirmação dos arquivos gerados (histogramas, correlação, PCA, relatório).
+- **Localização do resultado:** `outputs/statistics/eda/` — por exemplo `distribuicoes_features.png`, `correlacao_features.png`, `pca_2d.png`, `relatorio_eda.md` (conteúdo exato pode variar conforme o script).
 
 ## Inferência e validação
 
@@ -345,20 +397,26 @@ caminho/para/imagem.jpg: vaca=1323 (confiança=0.891)
 
 ### Detectar keypoints em imagem não anotada
 
+**Instruções:**
+
 ```powershell
+# Uma imagem
 python scripts/predict_keypoints.py --image caminho/para/imagem.jpg
-```
 
-Ou para uma pasta inteira:
-
-```powershell
+# Todas as imagens de uma pasta (recursivo; .jpg, .png, etc.)
 python scripts/predict_keypoints.py --input-dir caminho/para/pasta
 ```
 
-Saída:
+O script usa o modelo em `outputs/keypoints/train/weights/best.pt`. Caminhos relativos (ex.: `data/unified/yolo_pose/...`) são resolvidos a partir da raiz do projeto, mesmo rodando de dentro de `scripts/`.
 
-- Imprime no terminal as coordenadas dos keypoints detectados (em pixels).
-- Salva imagens anotadas com keypoints em `outputs/inference/keypoints/pred/`.
+**Resultado esperado:**
+
+- **Terminal:** para cada imagem, as coordenadas (x, y) de cada keypoint com o **nome** (withers, back, hook_up, hook_down, hip, tail_head, pin_up, pin_down), conforme `config.yaml` → `keypoints.names`.
+- **Arquivos:** imagens com a **box** desenhada e o rótulo **"cow"**, e cada **keypoint** com seu nome ao lado; uma imagem por arquivo de entrada. Com uma única imagem, a saída mantém o nome do arquivo; com várias, pode haver sufixo numérico em caso de nome duplicado.
+
+**Localização do resultado:** `outputs/inference/keypoints/pred/` (ex.: `imagem.jpg` ou `image0.jpg`, `image1.jpg`, …).
+
+Requisito: **opencv-python** para desenhar os nomes na imagem; sem ele, as imagens ainda são salvas, mas sem os textos (comportamento padrão do Ultralytics).
 
 ## Logs e estatísticas
 
@@ -420,8 +478,9 @@ O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 │   ├── train_keypoints.py
 │   ├── evaluate_keypoints.py   # avaliar keypoints no conjunto de teste
 │   ├── train_classifier.py
-│   ├── evaluate_classifier.py # validar classificador (top-1 / top-5 acc)
+│   ├── evaluate_classifier.py   # validar classificador (top-1 / top-5 acc)
 │   ├── visualize_keypoints.py
+│   ├── verificar_unify_convert.py  # verificar unify+convert; --plot N ou --image path
 │   ├── predict_cow.py
 │   └── predict_keypoints.py
 └── tests/

@@ -65,6 +65,12 @@ def main() -> None:
         action="store_true",
         help="Só rodar model.val(); não calcular losses por amostra.",
     )
+    parser.add_argument(
+        "--image",
+        type=str,
+        default=None,
+        help="Avaliar apenas esta imagem (caminho); exibe PCK e distância média para ela. O label deve estar em test/labels com o mesmo stem.",
+    )
     args = parser.parse_args()
 
     cfg = get_full_config()
@@ -109,9 +115,27 @@ def main() -> None:
 
     test_images_dir = yolo_pose_dir / "test" / "images"
     test_labels_dir = yolo_pose_dir / "test" / "labels"
+    # Se --image foi passado, avaliar só essa imagem (procurar em test ou pelo path)
+    single_image_path = None
+    if args.image:
+        p = Path(args.image)
+        if not p.is_absolute():
+            p = (root / p).resolve()
+        if not p.exists():
+            p = test_images_dir / Path(args.image).name
+        if p.exists():
+            single_image_path = p
+            test_image_paths_for_eval = [single_image_path]
+        else:
+            print(f"Imagem não encontrada: {args.image}")
+            sys.exit(1)
+    else:
+        test_image_paths_for_eval = None
+
     if not test_images_dir.exists() or not list(test_images_dir.glob("*.*")):
-        print("Pasta de teste vazia ou inexistente:", test_images_dir)
-        sys.exit(1)
+        if not single_image_path:
+            print("Pasta de teste vazia ou inexistente:", test_images_dir)
+            sys.exit(1)
 
     imgsz = data_cfg.get("image_size", 640)
     print("Avaliando no conjunto de TESTE (hold-out).")
@@ -122,32 +146,40 @@ def main() -> None:
 
     model = YOLO(str(weights))
 
-    # 1) Métricas oficiais (mAP, etc.)
+    # 1) Métricas oficiais (mAP, etc.) — baseadas em OKS, não em distância em pixels
     results_val = model.val(data=str(data_yaml), split="test")
     if results_val is not None:
         if hasattr(results_val, "results_dict") and results_val.results_dict:
             d = results_val.results_dict
-            print("Métricas no TESTE (Ultralytics):")
+            print("Métricas no TESTE (Ultralytics, baseadas em OKS):")
             for k, v in sorted(d.items()):
                 if v is not None and isinstance(v, (int, float)):
                     print(
                         f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}"
                     )
+            print(
+                "  [NOTA] mAP50/Precision/Recall usam OKS (Object Keypoint Similarity): "
+                "são sensíveis à escala do objeto e podem ser altos mesmo com pontos "
+                "visualmente distantes. Para 'proximidade em pixels', use PCK e distância média abaixo."
+            )
         elif hasattr(results_val, "metrics"):
             print("Métricas no TESTE:", results_val.metrics)
     print()
 
-    # 2) Losses por amostra (IoU, MSE, L1, CE, Focal, Heatmap)
+    # 2) Losses por amostra (IoU, MSE, L1, CE, Focal, Heatmap) e métricas em pixels (PCK, distância)
     if args.no_losses:
         print("Losses de avaliação omitidas (--no-losses).")
         return
 
     image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-    test_image_paths = [
-        f
-        for f in test_images_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in image_exts
-    ]
+    if test_image_paths_for_eval is not None:
+        test_image_paths = test_image_paths_for_eval
+    else:
+        test_image_paths = [
+            f
+            for f in test_images_dir.iterdir()
+            if f.is_file() and f.suffix.lower() in image_exts
+        ]
     if not test_image_paths:
         print("Nenhuma imagem de teste encontrada.")
         return
@@ -164,11 +196,32 @@ def main() -> None:
     all_ce = []
     all_focal = []
     all_heatmap = []
+    all_mean_dist_px = []
+    all_pck_20 = []
+    all_pck_30 = []
     n_skipped = 0
 
     for img_path, res in zip(test_image_paths, predictions):
         stem = img_path.stem
-        lbl_path = test_labels_dir / f"{stem}.txt"
+        labels_dir = test_labels_dir
+        try:
+            parts = img_path.resolve().parts
+            if "fold_" in parts and "test" in parts:
+                idx = parts.index("test")
+                if idx > 0:
+                    base = Path(*parts[: idx + 1])
+                    fold_labels = base / "labels"
+                    if (fold_labels / f"{stem}.txt").exists():
+                        labels_dir = fold_labels
+        except Exception:
+            pass
+        lbl_path = labels_dir / f"{stem}.txt"
+        if not lbl_path.exists():
+            for i in range(1, 20):
+                fold_lbl = yolo_pose_dir / f"fold_{i}" / "test" / "labels" / f"{stem}.txt"
+                if fold_lbl.exists():
+                    lbl_path = fold_lbl
+                    break
         # Tamanho real da imagem para GT (labels normalizados) alinhar com pred (pixels)
         if hasattr(res, "orig_shape") and res.orig_shape is not None:
             try:
@@ -231,6 +284,11 @@ def main() -> None:
         all_ce.append(losses["cross_entropy"])
         all_focal.append(losses["focal_loss"])
         all_heatmap.append(losses["heatmap_loss"])
+        all_mean_dist_px.append(losses["mean_distance_px"])
+        all_pck_20.append(losses["pck_20px"])
+        all_pck_30.append(losses["pck_30px"])
+        if single_image_path is not None:
+            print(f"  [{img_path.name}] dist_média={losses['mean_distance_px']:.1f}px  PCK@20px={100*losses['pck_20px']:.0f}%  PCK@30px={100*losses['pck_30px']:.0f}%")
 
     n_eval = len(all_iou)
     print("Losses de avaliação no TESTE (média sobre amostras com predição e GT):")
@@ -244,9 +302,15 @@ def main() -> None:
         print(f"  Cross entropy  (conf vs vis):  {np.mean(all_ce):.6f}")
         print(f"  Focal loss     (conf vs vis):  {np.mean(all_focal):.6f}")
         print(f"  Heatmap loss   (MSE heatmaps):  {np.mean(all_heatmap):.6f}")
+        print()
+        print("  Métricas em pixels (proximidade real pred vs GT):")
+        print(f"  Distância média (px):  {np.mean(all_mean_dist_px):.2f}")
+        print(f"  PCK@20px (% pontos ≤20px): {100 * np.mean(all_pck_20):.1f}%")
+        print(f"  PCK@30px (% pontos ≤30px): {100 * np.mean(all_pck_30):.1f}%")
+        print("  [PCK = Percentage of Correct Keypoints; reflete melhor a 'acuracia visual' que mAP50/OKS.]")
 
     print()
-    print("Concluído. Use essas métricas e losses como desempenho final no teste.")
+    print("Concluído. Use PCK e distância média para avaliar proximidade visual; mAP50/OKS para comparação com literatura.")
 
 
 if __name__ == "__main__":

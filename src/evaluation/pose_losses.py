@@ -290,6 +290,55 @@ def heatmap_loss(
     return float(np.mean((pred_hm - gt_hm) ** 2))
 
 
+def keypoint_mean_distance_px(
+    pred_kp: np.ndarray,
+    gt_kp: np.ndarray,
+    mask: Optional[np.ndarray] = None,
+) -> float:
+    """
+    Distância média em pixels (Euclidiana) entre pred e GT por keypoint.
+    pred_kp, gt_kp: (N, 2) ou (n_samples, n_kp, 2). mask: 1 onde keypoint visível.
+    """
+    pred_kp = np.asarray(pred_kp, dtype=np.float64)
+    gt_kp = np.asarray(gt_kp, dtype=np.float64)
+    diff = pred_kp - gt_kp
+    dist = np.sqrt((diff ** 2).reshape(-1, 2).sum(axis=1))
+    if mask is not None:
+        mask = np.asarray(mask, dtype=np.float64).ravel()
+        if mask.size != dist.size:
+            mask = np.broadcast_to(mask, dist.shape)
+        dist = dist * mask
+        count = max(np.sum(mask), 1)
+        return float(np.sum(dist) / count)
+    return float(np.mean(dist))
+
+
+def keypoint_pck(
+    pred_kp: np.ndarray,
+    gt_kp: np.ndarray,
+    threshold_px: float,
+    mask: Optional[np.ndarray] = None,
+) -> float:
+    """
+    PCK (Percentage of Correct Keypoints): fração de keypoints com distância <= threshold_px.
+    Retorna valor entre 0 e 1 (ex.: 0.6 = 60% dos pontos dentro do limiar).
+    pred_kp, gt_kp: (N, 2) ou (n_samples, n_kp, 2). mask: 1 onde keypoint visível.
+    """
+    pred_kp = np.asarray(pred_kp, dtype=np.float64)
+    gt_kp = np.asarray(gt_kp, dtype=np.float64)
+    diff = pred_kp - gt_kp
+    dist = np.sqrt((diff ** 2).reshape(-1, 2).sum(axis=1))
+    correct = (dist <= threshold_px).astype(np.float64)
+    if mask is not None:
+        mask = np.asarray(mask, dtype=np.float64).ravel()
+        if mask.size != correct.size:
+            mask = np.broadcast_to(mask, correct.shape)
+        correct = correct * mask
+        count = max(np.sum(mask), 1)
+        return float(np.sum(correct) / count)
+    return float(np.mean(correct))
+
+
 def compute_all_pose_losses(
     pred_boxes: np.ndarray,
     pred_kp: np.ndarray,
@@ -322,6 +371,9 @@ def compute_all_pose_losses(
             "cross_entropy": float("nan"),
             "focal_loss": float("nan"),
             "heatmap_loss": float("nan"),
+            "mean_distance_px": float("nan"),
+            "pck_20px": float("nan"),
+            "pck_30px": float("nan"),
         }
 
     iou = iou_loss(pred_boxes, gt_boxes, format=box_format)
@@ -348,6 +400,10 @@ def compute_all_pose_losses(
         hm_losses.append(hl)
     heatmap = float(np.mean(hm_losses))
 
+    mean_dist_px = keypoint_mean_distance_px(pred_flat, gt_flat, mask=mask_flat)
+    pck_20 = keypoint_pck(pred_flat, gt_flat, 20.0, mask=mask_flat)
+    pck_30 = keypoint_pck(pred_flat, gt_flat, 30.0, mask=mask_flat)
+
     return {
         "iou_loss": iou,
         "mse_loss": mse,
@@ -355,4 +411,7 @@ def compute_all_pose_losses(
         "cross_entropy": ce,
         "focal_loss": fl,
         "heatmap_loss": heatmap,
+        "mean_distance_px": mean_dist_px,
+        "pck_20px": pck_20,
+        "pck_30px": pck_30,
     }

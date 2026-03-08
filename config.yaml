@@ -1,72 +1,67 @@
+# Nome e parâmetros gerais da aplicação (inferência, CLI)
 app:
   name: "Identificacao de Vacas - Visao Computacional"
-  model_name: "yolov8"
-  image_size: 640
-  confidence_threshold: 0.5
-  top_k: 5
+  model_name: "yolov8"           # modelo base (ex.: yolov8)
+  image_size: 640               # tamanho da imagem para inferência (pixels)
+  confidence_threshold: 0.5     # mínimo de confiança para aceitar predição (0–1)
+  top_k: 5                      # quantas classes mostrar no top-K (predict_cow)
 
+# Caminhos de pastas (relativos à raiz do projeto)
 paths:
-  data_dir: "data"
-  models_dir: "models"
-  outputs_dir: "outputs"
-  raw_dir: "raw"
-  unified_dir: "data/unified"
-  logs_dir: "outputs/logs"
-  statistics_dir: "outputs/statistics"
+  data_dir: "data"              # pasta principal de dados processados
+  models_dir: "models"          # modelos pré-treinados ou exportados
+  outputs_dir: "outputs"         # saídas de treino, logs, inferência
+  raw_dir: "raw"                # dados brutos (catalogo, classificacao)
+  unified_dir: "data/unified"   # dados unificados e convertidos (keypoints, classification)
+  logs_dir: "outputs/logs"      # logs de cada script
+  statistics_dir: "outputs/statistics"  # JSON de métricas, gráficos, relatórios
 
-# Pipeline de dados
+# Pipeline de dados (unify, prepare_dataset, tamanhos de imagem)
 data:
-  catalogo_subdir: "catalogo"
-  classificacao_subdir: "classificacao"
-  keypoints_subdir: "Key_points"
-  image_size: 640
-  # Split 80/10/10 (treino/validação/teste) por pasta em stratified_per_group
-  train_ratio: 0.8   # 80% de cada pasta para treino
-  val_ratio: 0.1    # 10% de cada pasta para validação (durante o treino)
-  test_ratio: 0.1   # 10% de cada pasta para teste (avaliar modelo final)
-  split_test_ratio: 0.1
-  random_seed: 42
+  catalogo_subdir: "catalogo"       # subpasta em raw com imagens e anotações de keypoints
+  classificacao_subdir: "classificacao"  # subpasta em raw com fotos por vaca (classificador)
+  keypoints_subdir: "Key_points"    # subpasta em cada pasta do catálogo com JSONs do Label Studio
+  image_size: 640                   # tamanho da imagem para treino/validação (YOLO)
+  train_ratio: 0.8                  # fração para treino no split (ex.: 80%)
+  val_ratio: 0.1                   # fração para validação durante o treino (ex.: 10%)
+  test_ratio: 0.1                  # fração para teste hold-out (ex.: 10%)
+  split_test_ratio: 0.1            # usado em alguns fluxos de split global
+  random_seed: 42                  # semente para reprodutibilidade dos splits
 
-# Validação de pose (reduz vazamento)
+# Estratégia de validação para pose (evita vazamento entre train/val/test)
 pose:
-  k_folds: 5
-  # stratified_per_group: 80% train, 10% val, 10% test por pasta (sem overlap)
-  strategy: "stratified_per_group"  # stratified_per_group | group_kfold | kfold_misturado
+  k_folds: 5                       # número de folds quando strategy = group_kfold
+  strategy: "stratified_per_group" # stratified_per_group | group_kfold | kfold_misturado
 
-# Augmentation (treino) - aplicadas no prepare_dataset (offline) e opcionalmente no YOLO
+# Augmentation no prepare_dataset (offline); mosaic e parâmetros de transformação
 augmentation:
-  enabled: true
-  horizontal_flip: 0.5
-  vertical_flip: 0.2
-  rotate_limit: 15
-  brightness_contrast: 0.2
-  gaussian_blur: 0.1
-  hue_saturation: 0.1
-  contrast_limit: 0.25
-  gaussian_noise_std: 10.0
-  train_augment_copies: 1
-  # Mosaic: combina 4 imagens em uma (2x2). Gera o máximo possível a partir do conjunto de treino
-  # (uma imagem mosaic a cada 4 imagens; cada imagem de treino entra em exatamente um mosaic).
-  mosaic_enabled: true
+  enabled: true                   # ativar augmentations no prepare_dataset
+  horizontal_flip: 0.5            # probabilidade de flip horizontal (0–1)
+  vertical_flip: 0.2              # probabilidade de flip vertical (0–1)
+  rotate_limit: 15                # ângulo máximo de rotação em graus (±)
+  brightness_contrast: 0.2         # intensidade de variação de brilho/contraste
+  gaussian_blur: 0.1              # probabilidade/intensidade de desfoque gaussiano
+  hue_saturation: 0.1             # variação de matiz e saturação (HSV)
+  contrast_limit: 0.25             # limite de contraste (CLAHE ou similar)
+  gaussian_noise_std: 10.0         # desvio padrão do ruído gaussiano adicionado
+  train_augment_copies: 1          # cópias augmentadas por imagem de treino (0 = desligado)
+  mosaic_enabled: true             # gerar imagens mosaic 2x2 (4 imagens) no treino
 
-# Treino YOLO
+# Treino YOLO (keypoints e classificador)
 training:
-  device: "0"  # GPU (0, 1, ...) ou "cpu"
-  epochs: 5
-  batch_size: 16
-  # Classificador: usa imagens menores (224) e batch menor para reduzir uso de GPU
-  classifier_batch_size: 16
-  classifier_imgsz: 320
-  # Learning rate: lr0 = inicial, lrf = fator do LR final (LR_final = lr0 * lrf)
-  lr0: 0.01
-  lrf: 0.01
-  # Early stopping: interrompe se a métrica de validação não melhorar em N épocas
-  patience: 20
-  workers: 4
+  device: "0"                     # GPU ("0", "1", ...) ou "cpu"
+  epochs: 5                       # número máximo de épocas
+  batch_size: 16                 # batch size para treino de keypoints (pose)
+  classifier_batch_size: 16      # batch size para treino do classificador
+  classifier_imgsz: 320           # tamanho da imagem para o classificador (pixels)
+  lr0: 0.01                      # learning rate inicial
+  lrf: 0.01                      # fator do LR final (LR_final = lr0 * lrf)
+  patience: 20                    # early stopping: parar se val não melhorar em N épocas
+  workers: 4                      # número de workers no DataLoader
 
-# Keypoints (ordem do Label Studio)
+# Keypoints anatômicos (ordem deve coincidir com o Label Studio e com os labels)
 keypoints:
-  names:
+  names:                          # nomes dos pontos; ordem = índice no label e no modelo
     - withers
     - back
     - hook_up
@@ -75,11 +70,11 @@ keypoints:
     - tail_head
     - pin_up
     - pin_down
-  skeleton: []  # opcional: pares de índices para desenhar esqueleto
+  skeleton: []                    # opcional: lista de pares [i, j] para desenhar segmentos
 
-# Feature selection (para análise de importância e treino)
+# Seleção de features (EDA e modelos que usam features derivadas dos keypoints)
 feature_selection:
-  method: "mutual_info"  # mutual_info, rf_importance, pca
-  top_k: 5   # top-k para listagem/EDA
-  top_k_for_training: 15  # usar apenas as N melhores features em modelos treinados com features
+  method: "mutual_info"            # mutual_info | rf_importance | pca
+  top_k: 5                        # quantas features listar no EDA / importância
+  top_k_for_training: 15          # usar apenas as N melhores features no treino com features
 
