@@ -64,6 +64,8 @@ raw/
 pip install -r requirements.txt
 ```
 
+**GPU NVIDIA (ex.: RTX 5060):** a RTX 50xx usa arquitetura Blackwell e precisa de PyTorch com **CUDA 12.8**. Veja [docs/SETUP_GPU.md](docs/SETUP_GPU.md) para instalação e verificação.
+
 ### 2. Rodar o pipeline completo (recomendado)
 
 ```powershell
