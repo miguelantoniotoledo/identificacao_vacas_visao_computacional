@@ -292,26 +292,56 @@ Ou seja: **predict_cow** não é validador; é para uso em produção ou em imag
 
 ### Classificar qual vaca está na imagem (inferência)
 
+O **predict_cow** carrega o modelo treinado (`outputs/classifier/train/weights/best.pt`), processa as imagens que você passar e, para cada uma, devolve a **classe prevista** (nome da vaca) e a **confiança** (0–1). Não usa rótulos nem calcula acurácia; é só inferência.
+
+**Comportamento:**
+
+1. Carrega o modelo do classificador (YOLO-cls).
+2. Lê as imagens (uma via `--image` ou todas em `--input-dir`, incluindo subpastas).
+3. Para cada imagem: prediz a classe (e opcionalmente o top-K) e imprime no terminal.
+4. Salva cópias das imagens com a classe e a confiança desenhadas em `outputs/inference/classifier/pred/`.
+5. Grava log e métricas (número de imagens, confiança média) em `outputs/logs/`.
+
+**Comandos:**
+
 ```powershell
+# Uma imagem
 python scripts/predict_cow.py --image caminho/para/imagem.jpg
-```
 
-Ou para uma pasta inteira:
-
-```powershell
+# Todas as imagens de uma pasta (e subpastas)
 python scripts/predict_cow.py --input-dir caminho/para/pasta
-```
 
-Para exibir as **top-K** classes por imagem (ex.: top-3 ou top-5), use `--top-k` (o valor padrão vem de `config.yaml` → `app.top_k`):
-
-```powershell
+# Top-K classes por imagem (ex.: top-3; o padrão vem de config.yaml → app.top_k)
 python scripts/predict_cow.py --input-dir pasta/imagens --top-k 5
 ```
 
-Saída:
+**Exemplo de uso e saída no terminal:**
 
-- Imprime no terminal, para cada imagem: o nome da vaca (classe YOLO) e a confiança.
-- Salva imagens anotadas em `outputs/inference/classifier/pred/`.
+```powershell
+python scripts/predict_cow.py --image raw/classificacao/1323/20260101_142804_baia23_VIPWX.jpg --top-k 3
+```
+
+Saída esperada:
+
+```
+Rodando classificação em 1 imagem(ns) (top_k=3)...
+raw\classificacao\1323\20260101_142804_baia23_VIPWX.jpg: top-3 → 1323=0.891, OutraVaca=0.065, MaisUma=0.032
+Imagens anotadas salvas em: outputs/inference/classifier/pred
+```
+
+Com `--top-k 1` (ou omitindo `--top-k` se no config for 1), a linha fica no formato:
+
+```
+caminho/para/imagem.jpg: vaca=1323 (confiança=0.891)
+```
+
+**Resumo da saída:**
+
+- **Terminal:** para cada imagem, o caminho do arquivo, a classe (nome da vaca) e a confiança; com top-K, as K classes mais prováveis e suas confianças.
+- **Arquivos:** imagens anotadas em `outputs/inference/classifier/pred/` (ex.: `image0.jpg`, `image1.jpg`, …).
+- **Log:** `outputs/logs/predict_cow_<timestamp>.log` e métricas em `outputs/statistics/`.
+
+**Pré-requisito:** o modelo deve existir em `outputs/classifier/train/weights/best.pt`. Se não existir, o script avisa e pede para rodar antes `python scripts/train_classifier.py`.
 
 ### Detectar keypoints em imagem não anotada
 
