@@ -23,7 +23,7 @@ A conversão de keypoints é feita por convert_labelstudio (escreve em keypoints
 
 import shutil
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from src.config import get_full_config
 

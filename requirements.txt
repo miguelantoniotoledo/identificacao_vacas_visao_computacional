@@ -1,17 +1,13 @@
-# Dependências da aplicação
-PyYAML==6.0.2
-
-# Visão computacional e YOLO
-ultralytics>=8.0.0
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+ultralytics==8.4.21
 opencv-python>=4.8.0
-numpy>=1.24.0
-albumentations>=1.3.0
-torch>=2.0.0
-torchvision>=0.15.0
-
-# Feature selection e análise
+numpy>=1.26.0
+pandas>=2.0.0
 scikit-learn>=1.3.0
-
-# Gráficos para métricas
 matplotlib>=3.7.0
+seaborn>=0.13.0
+pyyaml>=6.0
 
