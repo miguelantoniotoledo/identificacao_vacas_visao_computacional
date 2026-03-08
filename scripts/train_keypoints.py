@@ -33,7 +33,7 @@ def _ensure_model_override(model, weights: str = POSE_WEIGHTS) -> None:
 
 
 def _get_best_map50_95(results_csv: Path) -> float:
-    """Lê a última linha do results.csv e retorna metrics/pose_mAP50-95 ou 0."""
+    """Lê a última linha do results.csv e retorna mAP50-95 da pose (última época)."""
     if not results_csv.exists():
         return 0.0
     try:
@@ -43,9 +43,17 @@ def _get_best_map50_95(results_csv: Path) -> float:
         if not rows:
             return 0.0
         last = rows[-1]
-        key = "metrics/pose_mAP50-95"
-        val = last.get(key) or last.get("Pose_mAP50-95")
-        return float(val) if val else 0.0
+        # Ultralytics pode usar nomes diferentes; (P) = Pose
+        for key in (
+            "metrics/mAP50-95(P)",
+            "metrics/pose_mAP50-95",
+            "Pose_mAP50-95",
+            "metrics/mAP50-95",
+        ):
+            val = last.get(key)
+            if val is not None and str(val).strip() != "":
+                return float(val)
+        return 0.0
     except Exception:
         return 0.0
 
@@ -136,11 +144,32 @@ def main() -> None:
                 best_fold = fold_i
         train_weights = keypoints_out / "train" / "weights"
         train_weights.mkdir(parents=True, exist_ok=True)
-        if best_fold is not None:
-            src_best = keypoints_out / f"fold_{best_fold}" / "weights" / "best.pt"
+        # Escolher qual fold copiar: o de maior mAP ou, se todos 0, o primeiro com best.pt
+        fold_to_copy = best_fold
+        if fold_to_copy is None:
+            for m in fold_metrics:
+                fi = m["fold"]
+                if (keypoints_out / f"fold_{fi}" / "weights" / "best.pt").exists():
+                    fold_to_copy = fi
+                    logger.log(f"Nenhum mAP50-95 > 0 lido do CSV; usando fold {fi} como modelo em train/weights.")
+                    break
+        if fold_to_copy is not None:
+            src_best = keypoints_out / f"fold_{fold_to_copy}" / "weights" / "best.pt"
             if src_best.exists():
                 shutil.copy2(src_best, train_weights / "best.pt")
-                logger.log(f"Melhor fold: {best_fold} (mAP50-95={best_mAP:.4f}). Copiando best.pt para train/weights. Resultado: sucesso")
+                logger.log(f"Melhor fold: {fold_to_copy} (mAP50-95={best_mAP:.4f}). Copiando best.pt para train/weights. Resultado: sucesso")
+                # Copiar também results.csv e last.pt do fold escolhido para ter dados em train/
+                run_fold = keypoints_out / f"fold_{fold_to_copy}"
+                train_dir = keypoints_out / "train"
+                for fname in ("results.csv", "args.yaml"):
+                    src_f = run_fold / fname
+                    if src_f.exists():
+                        shutil.copy2(src_f, train_dir / fname)
+                last_pt = run_fold / "weights" / "last.pt"
+                if last_pt.exists():
+                    shutil.copy2(last_pt, train_weights / "last.pt")
+                if best_fold is None:
+                    best_fold = fold_to_copy
 
         # Estatísticas comparativas entre folds
         maps = [m["mAP50_95"] for m in fold_metrics]

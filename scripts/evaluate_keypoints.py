@@ -79,25 +79,33 @@ def main() -> None:
         print("data.yaml não encontrado. Rode antes: python scripts/prepare_dataset.py")
         sys.exit(1)
 
+    keypoints_out = root / paths.get("outputs_dir", "outputs") / "keypoints"
+    default_weights = keypoints_out / "train" / "weights" / "best.pt"
+
     weights = args.weights
     if not weights:
-        weights = (
-            root
-            / paths.get("outputs_dir", "outputs")
-            / "keypoints"
-            / "train"
-            / "weights"
-            / "best.pt"
-        )
+        weights = default_weights
     else:
         weights = Path(weights)
         if not weights.is_absolute():
             weights = root / weights
 
     if not weights.exists():
-        print(f"Modelo não encontrado: {weights}")
-        print("Rode antes: python scripts/train_keypoints.py")
-        sys.exit(1)
+        # Fallback: se train/weights/best.pt não existir (ex.: treino k-fold interrompido), usar o primeiro fold com best.pt
+        if weights == default_weights and keypoints_out.exists():
+            for i in range(1, 20):
+                candidate = keypoints_out / f"fold_{i}" / "weights" / "best.pt"
+                if candidate.exists():
+                    weights = candidate
+                    print(f"Usando modelo do fold {i} (train/weights/best.pt não encontrado): {weights}")
+                    break
+            else:
+                weights = default_weights  # manter original para mensagem de erro
+        if not weights.exists():
+            print(f"Modelo não encontrado: {weights}")
+            print("Rode antes: python scripts/train_keypoints.py (e aguarde o fim de todos os folds para gerar train/weights/best.pt).")
+            print("Se o treino foi interrompido, existe best.pt em algum outputs/keypoints/fold_N/weights/?")
+            sys.exit(1)
 
     test_images_dir = yolo_pose_dir / "test" / "images"
     test_labels_dir = yolo_pose_dir / "test" / "labels"

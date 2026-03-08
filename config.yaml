@@ -56,7 +56,7 @@ training:
   batch_size: 16
   # Classificador: usa imagens menores (224) e batch menor para reduzir uso de GPU
   classifier_batch_size: 16
-  classifier_imgsz: 640
+  classifier_imgsz: 320
   # Learning rate: lr0 = inicial, lrf = fator do LR final (LR_final = lr0 * lrf)
   lr0: 0.01
   lrf: 0.01
