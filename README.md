@@ -8,6 +8,43 @@ Uma **comparação com o projeto de referência** [deteccao_keypoints_vacas](htt
 
 ---
 
+## Para avaliadores (pós-graduação)
+
+- **Objetivo:** pipeline reprodutível para (1) estimativa de pose (8 keypoints anatômicos em vacas) com YOLOv8-pose e (2) classificação de identidade com YOLOv8-cls, a partir de dados anotados no Label Studio.
+- **Metodologia:** unificação de dados brutos (catálogo + classificação) → conversão Label Studio → YOLO pose → split estratificado por grupo (80/10/10) com opção de k-fold → treino com early stopping; augmentations offline (flip, rotação, blur, HSV, mosaic) no preparo do dataset.
+- **Métricas:** keypoints: mAP50, mAP50-95 (OKS), **PCK@20px/30px** e **distância média em pixels** (avaliação no hold-out de teste); classificador: top-1 e top-5 accuracy em val/test. Detalhes em [docs/COMPARACAO_PROJETO_REFERENCIA.md](docs/COMPARACAO_PROJETO_REFERENCIA.md) (OKS vs proximidade em pixels).
+- **Reprodutibilidade:** `config.yaml` (seed, ratios, device); pipeline único (`python scripts/pipeline.py`); métricas e logs em `outputs/statistics/` e `outputs/logs/`.
+- **Referência:** [thalessalvador/deteccao_keypoints_vacas](https://github.com/thalessalvador/deteccao_keypoints_vacas).
+
+---
+
+## Primeira vez usando o projeto
+
+Se você **não conhece o repositório**, siga na ordem:
+
+1. **Pré-requisitos:** Python 3.10+; opcional: GPU NVIDIA (ver [docs/SETUP_GPU.md](docs/SETUP_GPU.md)).
+2. **Clonar/abrir o projeto** e, na **raiz do repositório**, criar e ativar o ambiente:
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
+3. **Instalar dependências:**  
+   Se for usar GPU, instale primeiro PyTorch com CUDA (veja comentários no topo de `requirements.txt` e [docs/SETUP_GPU.md](docs/SETUP_GPU.md)). Depois:
+   ```powershell
+   pip install -r requirements.txt
+   ```
+4. **Colocar os dados brutos** em `raw/` conforme a [Estrutura de dados esperada](#estrutura-de-dados-esperada) (`raw/catalogo/<nome_vaca>/` com imagens e `Key_points/` com JSONs do Label Studio; `raw/classificacao/<nome_vaca>/` com fotos por vaca).
+5. **Rodar o pipeline completo** (recomendado na primeira vez):
+   ```powershell
+   python scripts/pipeline.py
+   ```
+   Isso executa em sequência: unificação e conversão → preparação dos splits → EDA → treino de keypoints → treino do classificador → visualizações. **Resultados:** modelos em `outputs/keypoints/train/weights/` e `outputs/classifier/train/weights/`; métricas e gráficos em `outputs/statistics/`; log consolidado em `outputs/logs/pipeline_run_<timestamp>.log`.
+6. **Rodar sempre na raiz do projeto** (evita erros de caminho). Exemplo: `python scripts/train_keypoints.py`, e não de dentro de `scripts/`.
+
+Para **avaliar** keypoints no conjunto de teste: `python scripts/evaluate_keypoints.py`. Para **inferência** em uma imagem: `python scripts/predict_keypoints.py --image caminho/para/imagem.jpg` ou `python scripts/predict_cow.py --image ...` (classificador).
+
+---
+
 ## Fluxo de dados e informações
 
 Este é o fluxo do pipeline: de onde vêm os dados, o que cada etapa faz e para onde vão os resultados.
@@ -25,7 +62,7 @@ raw/catalogo, raw/classificacao
         ↓
 [5] train_classifier   →  outputs/classifier/train/weights/best.pt
         ↓
-[6] visualize_keypoints →  outputs/vis/keypoints/
+[6] visualize_keypoints →  outputs/vis/keypoints/ + keypoints_val/ + keypoints_test/
 ```
 
 | Passo | Script | O que faz |
@@ -35,7 +72,7 @@ raw/catalogo, raw/classificacao
 | **3/6** | `analisar_features.py` | EDA: carrega labels, monta features geométricas, calcula as 15 melhores para treino; gera histogramas, correlação, PCA 2D e relatório em `outputs/statistics/eda/`. |
 | **4/6** | `train_keypoints.py` | Treina YOLOv8-pose (keypoints); **early stopping** (patience); se houver k-fold, treina por fold e escolhe o melhor por mAP50-95; salva `best.pt` em `outputs/keypoints/train/weights/`. |
 | **5/6** | `train_classifier.py` | Treina YOLOv8-cls (uma classe por pasta em `data/unified/classification/`); **early stopping**; salva modelo em `outputs/classifier/train/`. |
-| **6/6** | `visualize_keypoints.py` | Desenha keypoints e segmentos nas imagens de keypoints; salva em `outputs/vis/keypoints/`. |
+| **6/6** | `visualize_keypoints.py` | Desenha keypoints e segmentos nas imagens; gera **três pastas**: `outputs/vis/keypoints/` (conjunto completo), `outputs/vis/keypoints_val/` (validação) e `outputs/vis/keypoints_test/` (teste), para verificação visual do modelo. |
 
 Ao final, o pipeline grava um **log consolidado** em `outputs/logs/pipeline_run_<timestamp>.log` com data/hora de cada evento e estatísticas dos scripts.
 
@@ -48,7 +85,7 @@ Ao final, o pipeline grava um **log consolidado** em `outputs/logs/pipeline_run_
 | **analisar_features** | `python scripts/analisar_features.py` | Terminal: top features e confirmação de arquivos gerados. | `outputs/statistics/eda/` (histogramas, correlação, PCA, `relatorio_eda.md`) |
 | **train_keypoints** | `python scripts/train_keypoints.py` | Terminal: progresso por época; ao final, melhor fold e mAP50-95. | Modelo: `outputs/keypoints/train/weights/best.pt`; por fold: `outputs/keypoints/fold_N/`; estatísticas: `outputs/statistics/train_keypoints_folds.md`, `train_keypoints_latest.json` |
 | **train_classifier** | `python scripts/train_classifier.py` | Terminal: progresso por época e métricas de validação. | Modelo: `outputs/classifier/train/weights/best.pt`; curvas: `outputs/statistics/`; logs: `outputs/logs/` |
-| **visualize_keypoints** | `python scripts/visualize_keypoints.py` | Terminal: confirmação de imagens geradas. | `outputs/vis/keypoints/` (imagens com keypoints e segmentos) |
+| **visualize_keypoints** | `python scripts/visualize_keypoints.py` | Terminal: quantidade por split (completo, val, test). | `outputs/vis/keypoints/` (completo), `outputs/vis/keypoints_val/` (validação), `outputs/vis/keypoints_test/` (teste) — ground truth desenhado para verificação do modelo. |
 | **evaluate_keypoints** | `python scripts/evaluate_keypoints.py` (+ `--image path` para uma imagem) | Terminal: mAP (OKS), **PCK e distância média (px)** e losses. mAP50 é baseado em OKS; para “proximidade visual” use PCK. | Logs e métricas em `outputs/logs/`, `outputs/statistics/` |
 | **evaluate_classifier** | `python scripts/evaluate_classifier.py --split val\|test` | Terminal: top-1 e top-5 accuracy. | `outputs/statistics/evaluate_classifier_latest.json`; logs: `outputs/logs/` |
 | **verificar_unify_convert** | `python scripts/verificar_unify_convert.py` (+ `--plot N` ou `--image path`) | Terminal: OK/FALHA por verificação; com `--plot`/`--image`: confirmação de imagens salvas. | Com `--plot N`: `outputs/statistics/verificar_unify_convert/amostra_*_<nome>.jpg`; com `--image path`: `outputs/statistics/verificar_unify_convert/<stem>_anotacoes_originais.jpg` |
@@ -72,6 +109,24 @@ raw/
 ```
 
 ## Pipeline
+
+### Passo a passo resumido (ordem recomendada)
+
+| Ordem | Etapa | Pré-requisito | Comando principal |
+|-------|--------|----------------|-------------------|
+| 0 | Dados em `raw/` | Estrutura `raw/catalogo/`, `raw/classificacao/` | — |
+| 1 | Ambiente | Python 3.10+, venv ativado | `pip install -r requirements.txt` |
+| 2 | Unificar e converter | Dados em `raw/` | `python scripts/unify_and_convert.py` |
+| 3 | Verificar conversão (opcional) | Etapa 2 concluída | `python scripts/verificar_unify_convert.py` ou `--plot 3` |
+| 4 | Preparar splits | `data/unified/keypoints/` preenchido | `python scripts/prepare_dataset.py` |
+| 5 | EDA (opcional) | Etapa 4 | `python scripts/analisar_features.py` |
+| 6 | Treinar keypoints | `data/unified/yolo_pose/` (ou `fold_1/`…) | `python scripts/train_keypoints.py` |
+| 7 | Avaliar keypoints no teste | Modelo em `outputs/keypoints/train/weights/best.pt` | `python scripts/evaluate_keypoints.py` |
+| 8 | Treinar classificador | `data/unified/classification/` ou `classification_split/` | `python scripts/train_classifier.py` |
+| 9 | Avaliar classificador | Modelo treinado | `python scripts/evaluate_classifier.py --split test` |
+| 10 | Visualizar keypoints (opcional) | Labels ou predições | `python scripts/visualize_keypoints.py` |
+
+Ou execute tudo em sequência: `python scripts/pipeline.py` (etapas 2, 4, 5, 6, 8 e 10).
 
 ### 1. Ambiente
 
@@ -317,9 +372,13 @@ python scripts/evaluate_classifier.py --weights caminho/para/best.pt
 python scripts/visualize_keypoints.py
 ```
 
-- **O que faz:** lê imagens e labels (ou predições) e desenha pontos anatômicos e segmentos (linha dorsal, garupa, etc.) em cada imagem.
-- **Resultado esperado:** no terminal, confirmação da quantidade de imagens processadas e do diretório de saída.
-- **Localização do resultado:** imagens anotadas em `outputs/vis/keypoints/` (uma por imagem de entrada).
+- **O que faz:** lê imagens e labels YOLO pose e desenha pontos anatômicos e segmentos (linha dorsal, garupa, etc.) em cada imagem. Gera visualizações em **três pastas** para permitir verificação do sucesso do modelo:
+  - **Conjunto completo:** `data/unified/keypoints/` → `outputs/vis/keypoints/`
+  - **Validação:** `data/unified/yolo_pose/val/` (ou `fold_1/val/`) → `outputs/vis/keypoints_val/`
+  - **Teste:** `data/unified/yolo_pose/test/` (ou `fold_1/test/`) → `outputs/vis/keypoints_test/`
+- **Resultado esperado:** no terminal, contagem de imagens geradas em cada pasta (completo, validação, teste).
+- **Localização do resultado:** imagens com keypoints e segmentos em `outputs/vis/keypoints/`, `outputs/vis/keypoints_val/` e `outputs/vis/keypoints_test/`. Use as pastas val e test para inspecionar visualmente as anotações (ground truth) dos conjuntos de validação e teste.
+- **Nomes com acento:** o script suporta nomes de arquivo com acento (ex.: pastas "Fábio"); leitura e gravação usam bytes para evitar falhas do OpenCV no Windows.
 
 #### 3.6. Análise exploratória (EDA) das features
 
@@ -329,7 +388,7 @@ python scripts/analisar_features.py
 
 - **O que faz:** carrega os labels de keypoints em `data/unified/keypoints/labels`, monta features geométricas (e opcionalmente de textura/cor), calcula importância (mutual_info, rf_importance ou PCA) e gera visualizações.
 - **Resultado esperado:** no terminal, listagem das top features e confirmação dos arquivos gerados (histogramas, correlação, PCA, relatório).
-- **Localização do resultado:** `outputs/statistics/eda/` — por exemplo `distribuicoes_features.png`, `correlacao_features.png`, `pca_2d.png`, `relatorio_eda.md` (conteúdo exato pode variar conforme o script).
+- **Localização do resultado:** `outputs/statistics/eda/` — por exemplo `distribuicoes_features.png`, `correlacao_features.png`, `pca_2d.png`, `relatorio_eda.md`. O **Relatório Final — Estatísticas e Observações do Modelo** está em [docs/relatorio_final_estatisticas_observacoes_modelo.md](docs/relatorio_final_estatisticas_observacoes_modelo.md).
 
 ## Inferência e validação
 
@@ -434,16 +493,68 @@ O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 
 - `outputs/logs/pipeline_run_<timestamp>.log`: log único com o passo a passo de cada etapa e, ao final, a seção **ESTATÍSTICAS FINAIS POR PROCESSO** (F1, acurácia, mAP, precisão, recall, etc., conforme disponível em cada script).
 
+## Estatísticas do pipeline e conclusão do modelo
+
+Após rodar o pipeline (ou os scripts de treino e avaliação), consulte o **último log de pipeline** (`outputs/logs/pipeline_run_<timestamp>.log`) e os JSON em `outputs/statistics/` para preencher as métricas abaixo. Esta seção serve tanto para **avaliação (pós-graduação)** quanto para **documentar o comportamento do modelo** no seu ambiente.
+
+### Onde encontrar as métricas
+
+| Métrica | Fonte |
+|--------|--------|
+| **POSE (keypoints)** | `outputs/statistics/train_keypoints_latest.json` (treino/val por fold); `evaluate_keypoints.py` no **teste** → terminal e `outputs/statistics/evaluate_keypoints_*.json` |
+| **Classificação** | `outputs/statistics/evaluate_classifier_latest.json` (top-1, top-5 em val ou test); também no log do pipeline |
+| **Resumo do pipeline** | `outputs/logs/pipeline_run_<timestamp>.log` (seção final **ESTATÍSTICAS FINAIS POR PROCESSO**) |
+
+### Métricas POSE (keypoints)
+
+Preencha com os valores da **última avaliação no conjunto de teste** (`python scripts/evaluate_keypoints.py`):
+
+| Métrica | Valor (exemplo) | Observação |
+|--------|------------------|------------|
+| **mAP50 (OKS)** | — | Alto (~99%) é comum; não reflete proximidade em pixels. |
+| **mAP50-95 (OKS)** | — | Métrica principal para comparar modelos de pose. |
+| **Precision / Recall (pose)** | — | Do Ultralytics no split test. |
+| **PCK@20px** | — | % de keypoints a ≤ 20 px do GT; reflete “proximidade real”. |
+| **PCK@30px** | — | Idem com limiar 30 px. |
+| **Distância média (px)** | — | Média da distância pred↔GT por keypoint; quanto menor, melhor. |
+| **Losses (IoU, MSE, L1, etc.)** | — | Opcional; ver saída de `evaluate_keypoints.py`. |
+
+Em **k-fold**, use também `outputs/statistics/train_keypoints_folds.md` para a comparação entre folds (melhor fold, média e desvio de mAP50-95).
+
+### Métricas de classificação
+
+Preencha com os valores de **teste hold-out** (`python scripts/evaluate_classifier.py --split test`):
+
+| Métrica | Valor (exemplo) | Observação |
+|--------|------------------|------------|
+| **Top-1 accuracy** | — | Fração de imagens em que a classe prevista é a correta. |
+| **Top-5 accuracy** | — | Classe correta está entre as 5 mais prováveis. |
+
+O JSON em `outputs/statistics/evaluate_classifier_latest.json` contém esses valores para o último run.
+
+### Conclusão geral do modelo
+
+Use este bloco para descrever, com base no último pipeline e nas métricas acima:
+
+- **Características do modelo:** arquitetura (YOLOv8-pose e YOLOv8-cls), número de keypoints (8), split (80/10/10 ou k-fold), augmentations e early stopping.
+- **Qualidade das anotações:** origem (Label Studio), conversão para YOLO pose, verificação com `verificar_unify_convert.py`; possíveis limitações (oclusão, ângulo, consistência entre anotadores).
+- **Desempenho resumido:** o que os números de POSE e classificação indicam (ex.: mAP50-95 estável entre folds; PCK@20px em torno de X%; top-1 no teste em Y%).
+- **Pontos importantes:** uso de PCK e distância em px além do mAP (OKS); reprodutibilidade via `config.yaml` e pipeline único; referência ao projeto [deteccao_keypoints_vacas](https://github.com/thalessalvador/deteccao_keypoints_vacas) e a [docs/COMPARACAO_PROJETO_REFERENCIA.md](docs/COMPARACAO_PROJETO_REFERENCIA.md).
+
+*Atualize esta seção com os valores reais do seu último pipeline e ajuste a conclusão conforme seus resultados.*
+
 ## Configuração (`config.yaml`)
 
 | Seção | Descrição |
 |-------|-----------|
+| `app` | `name`, `image_size`, `confidence_threshold`, `top_k` (inferência e predict_cow) |
 | `paths` | `raw_dir`, `unified_dir`, `outputs_dir`, `logs_dir`, `statistics_dir` |
-| `data` | `image_size`, `train_ratio`, `val_ratio`, `random_seed` |
-| `augmentation` | `horizontal_flip`, `vertical_flip`, `rotate_limit`, `contrast_limit`, `gaussian_noise_std`, `train_augment_copies`, `mosaic_enabled` (mosaic usa todo o conjunto: 1 mosaic a cada 4 imagens) |
-| `training` | `device` (GPU), `epochs`, `batch_size`, `patience` |
-| `keypoints` | Nomes dos 8 pontos anatômicos |
-| `feature_selection` | `method` (mutual_info, rf_importance), `top_k` |
+| `data` | `catalogo_subdir`, `classificacao_subdir`, `keypoints_subdir`, `image_size`, `train_ratio`, `val_ratio`, `test_ratio`, `random_seed` |
+| `pose` | `k_folds`, `strategy` (stratified_per_group \| group_kfold \| kfold_misturado) |
+| `augmentation` | `enabled`, `horizontal_flip`, `vertical_flip`, `rotate_limit`, `brightness_contrast`, `gaussian_blur`, `hue_saturation`, `train_augment_copies`, `mosaic_enabled` |
+| `training` | `device` (GPU ou "cpu"), `epochs`, `batch_size`, `classifier_batch_size`, `patience`, `workers` |
+| `keypoints` | `names` (8 pontos anatômicos), `skeleton` (opcional) |
+| `feature_selection` | `method` (mutual_info, rf_importance, pca), `top_k`, `top_k_for_training` (EDA e modelos com features) |
 
 ## Estrutura do projeto
 
@@ -463,7 +574,7 @@ O **pipeline** (`python scripts/pipeline.py`) gera ainda:
 │   ├── statistics/        # JSON de métricas e PNG de gráficos
 │   ├── keypoints/         # Treino pose
 │   ├── classifier/        # Treino classificador
-│   ├── vis/               # Visualizações
+│   ├── vis/               # Visualizações (keypoints/, keypoints_val/, keypoints_test/)
 │   └── inference/         # Predições
 ├── src/
 │   ├── app/
@@ -562,3 +673,15 @@ importance = compute_keypoint_importance(labels_dir)
 # Correlação entre features (por exemplo, |corr| >= 0.7)
 corrs = compute_feature_correlations(labels_dir, min_abs_corr=0.7)
 ```
+
+---
+
+## Observações e troubleshooting
+
+- **Rodar da raiz do projeto:** execute os comandos a partir da pasta raiz do repositório (onde está `config.yaml`). Exemplo: `python scripts/train_keypoints.py`. Assim, caminhos relativos em `config.yaml` e nos scripts funcionam corretamente.
+- **CUDA não detectada:** use `python scripts/verificar_cuda.py`. Se aparecer "CUDA disponível: Não", instale PyTorch com o índice CUDA adequado (veja [docs/CUDA_WINDOWS.md](docs/CUDA_WINDOWS.md) e comentários em `requirements.txt`).
+- **Erro "No module named 'src'":** certifique-se de estar na raiz do projeto e de ter ativado o ambiente onde instalou as dependências.
+- **Verificação das anotações:** após `unify_and_convert.py`, use `verificar_unify_convert.py` para checar formato e contagens; `--amostras N` mostra conteúdo de N labels no terminal; `--plot N` gera N imagens com bbox e keypoints em `outputs/statistics/verificar_unify_convert/`.
+- **mAP alto mas pontos longe do GT:** as métricas mAP50/mAP50-95 usam OKS (tolerante à escala). Para "proximidade real" use as métricas **PCK** e **distância média (px)** reportadas por `evaluate_keypoints.py`; ver [docs/COMPARACAO_PROJETO_REFERENCIA.md](docs/COMPARACAO_PROJETO_REFERENCIA.md).
+
+**Documentação adicional:** [docs/COMPARACAO_PROJETO_REFERENCIA.md](docs/COMPARACAO_PROJETO_REFERENCIA.md) (métricas e comparação), [docs/relatorio_final_estatisticas_observacoes_modelo.md](docs/relatorio_final_estatisticas_observacoes_modelo.md) (Relatório Final — Estatísticas e Observações do Modelo), [docs/SETUP_GPU.md](docs/SETUP_GPU.md) e [docs/CUDA_WINDOWS.md](docs/CUDA_WINDOWS.md) (GPU e PyTorch/CUDA).
