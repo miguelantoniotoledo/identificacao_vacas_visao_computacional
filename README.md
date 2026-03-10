@@ -112,3 +112,9 @@ raw/
 ├── scripts/               # pipeline, unify_and_convert, prepare_dataset, train_*, evaluate_*, predict_*, visualize_*, verificar_*
 └── tests/
 ```
+
+## Considerações e análise preliminar
+
+- o dataset possui uma especificidade técnica na anotação acima do que pós graduandos possuem, sendo necessária a atribuição de um técnico (veterinário) para geração de anotações mais precisas.
+- a qualidade das imagens, método de exposição, distância e tamanho do brete podem ser geradores de menor acurácia no modelo. Além disso a presença de equipamentos ou pessoas que sobrepoem os animais também podem influenciar.
+- foram verificados de forma aleatória a presença de vacas fora de suas pastas reais, possuindo outros nomes. Dessa forma a acurácia do modelo também é prejudicada devido à não garantia de não aleatoridade (que previne o leaking no treinamento)
