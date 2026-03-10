@@ -295,11 +295,11 @@ def prepare_classification_split(
     step_log: Optional[Callable[[str], None]] = None,
 ) -> Optional[Tuple[Path, Dict[str, Any]]]:
     """
-    Cria split 80/10/10 (train/val/test) para classificação **por indivíduo** (uma classe por vaca).
-    Cada vaca (pasta) vai inteira para train, val ou test; nenhum indivíduo aparece em mais de um split (evita vazamento).
+    Cria split 80/10/10 (train/val/test) para classificação, **por pasta** (uma classe por vaca).
+    Em cada pasta (vaca), as fotos são embaralhadas e divididas 80% train, 10% val, 10% test.
+    A mesma vaca aparece em train, val e test com fotos diferentes.
     Entrada: data/unified/classification/<nome_vaca>/*.jpg
     Saída:   data/unified/classification_split/train/<nome_vaca>/, val/..., test/...
-    Usa train_ratio, val_ratio, test_ratio aplicados à **quantidade de vacas**, não de fotos.
     Retorna (classification_split_path, counts) ou None se pasta classification não existir.
     """
     cfg = get_full_config()
@@ -326,51 +326,36 @@ def prepare_classification_split(
     (out / "val").mkdir(exist_ok=True)
     (out / "test").mkdir(exist_ok=True)
 
-    cow_folders = [d for d in class_dir.iterdir() if d.is_dir()]
-    if not cow_folders:
-        if step_log:
-            step_log("Nenhuma pasta de vaca em classification. Split omitido.")
-        return None
-
-    # Split por indivíduo: embaralhar vacas e dividir por quantidade de vacas (não de fotos)
     random.seed(seed)
-    shuffled_cows = list(cow_folders)
-    random.shuffle(shuffled_cows)
-    n_cows = len(shuffled_cows)
-    n_test_c = max(1, int(round(n_cows * test_ratio))) if n_cows >= 2 else 0
-    n_val_c = max(0, int(round(n_cows * val_ratio)))
-    n_train_c = n_cows - n_test_c - n_val_c
-    if n_train_c < 1:
-        n_train_c = 1
-        n_test_c = max(0, n_cows - n_val_c - 1)
-    if n_test_c < 0:
-        n_test_c = 0
-    test_cows = shuffled_cows[:n_test_c] if n_test_c else []
-    val_cows = shuffled_cows[n_test_c : n_test_c + n_val_c] if n_val_c else []
-    train_cows = shuffled_cows[n_test_c + n_val_c :]
-
-    if step_log:
-        step_log(
-            f"Split classificação por indivíduo: {len(train_cows)} vacas train, {len(val_cows)} val, {len(test_cows)} test. Sem overlap de indivíduos."
-        )
-
     n_train, n_val, n_test = 0, 0, 0
-    for split_name, cow_list in [("train", train_cows), ("val", val_cows), ("test", test_cows)]:
-        for cow_dir in cow_list:
-            cow_name = cow_dir.name
-            images = _get_image_files(cow_dir)
-            if not images:
-                continue
+    cow_folders = [d for d in class_dir.iterdir() if d.is_dir()]
+    if step_log:
+        step_log(f"Split classificação: {len(cow_folders)} classes (vacas). 80% train, 10% val, 10% test por pasta (embaralhamento).")
+
+    for cow_dir in cow_folders:
+        cow_name = cow_dir.name
+        images = _get_image_files(cow_dir)
+        if not images:
+            continue
+        random.shuffle(images)
+        n = len(images)
+        n_t = max(0, int(round(n * train_ratio)))
+        n_v = max(0, int(round(n * val_ratio)))
+        n_te = n - n_t - n_v
+        if n_te < 0:
+            n_te = 0
+            n_t = n - n_v
+        train_list = images[:n_t]
+        val_list = images[n_t : n_t + n_v]
+        test_list = images[n_t + n_v :]
+        for split_name, img_list in [("train", train_list), ("val", val_list), ("test", test_list)]:
             dest = out / split_name / cow_name
             dest.mkdir(parents=True, exist_ok=True)
-            for img in images:
+            for img in img_list:
                 shutil.copy2(img, dest / img.name)
-            if split_name == "train":
-                n_train += len(images)
-            elif split_name == "val":
-                n_val += len(images)
-            else:
-                n_test += len(images)
+        n_train += len(train_list)
+        n_val += len(val_list)
+        n_test += len(test_list)
 
     if step_log:
         step_log(f"Classificação split: train={n_train}, val={n_val}, test={n_test}. Salvo em {out}.")

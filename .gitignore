@@ -1,4 +1,5 @@
 /.venv/
+/runs/
 __pycache__/
 *.py[cod]
 *.pyo
@@ -22,3 +23,5 @@ __pycache__/
 /outputs/
 # Documento de comparação com projeto de referência (não versionar)
 /docs/COMPARACAO_PROJETO_REFERENCIA.md
+# Pesos YOLO baixados pelo Ultralytics na raiz (re-download automático)
+/*.pt

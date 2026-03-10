@@ -115,6 +115,9 @@ raw/
 
 ## Considerações e análise preliminar
 
+Métricas e acurácias dos modelos (keypoints e classificação) e exemplos de como reproduzir a avaliação no teste: [Métricas e acurácias dos modelos](docs/METRICAS_ACURACIAS_MODELOS.md).
+
 - o dataset possui uma especificidade técnica na anotação acima do que pós graduandos possuem, sendo necessária a atribuição de um técnico (veterinário) para geração de anotações mais precisas.
 - a qualidade das imagens, método de exposição, distância e tamanho do brete podem ser geradores de menor acurácia no modelo. Além disso a presença de equipamentos ou pessoas que sobrepoem os animais também podem influenciar.
 - foram verificados de forma aleatória a presença de vacas fora de suas pastas reais, possuindo outros nomes. Dessa forma a acurácia do modelo também é prejudicada devido à não garantia de não aleatoridade (que previne o leaking no treinamento)
+- ao usar split por aleatório tanto para keypoints quanto para o classificador houve um processo de leaking generalizado. Dessa forma optou-se por fazer agrupamentos por vaca (individuo).
