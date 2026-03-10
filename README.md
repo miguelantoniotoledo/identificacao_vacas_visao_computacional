@@ -315,7 +315,7 @@ As losses são calculadas por imagem (predição com maior IoU em relação ao G
 
 **Localização do resultado:** logs em `outputs/logs/`; métricas em `outputs/statistics/` (conforme gravado pelo script de avaliação).
 
-**mAP50 (OKS) vs “acuracia visual”:** as métricas mAP50 e Precision/Recall do Ultralytics usam **OKS** (Object Keypoint Similarity), que depende da escala do animal: um mesmo erro em pixels pode ser “correto” em OKS em imagens grandes. Por isso um mAP50 alto (ex.: 93%) pode não corresponder a pontos muito próximos do GT. O script agora calcula também **PCK** (Percentage of Correct Keypoints: % de pontos com distância ≤ 20px ou ≤ 30px) e **distância média em pixels**; use essas métricas para avaliar a proximidade real pred vs anotação. Para uma única imagem: `python scripts/evaluate_keypoints.py --image "caminho/para/imagem.jpg"`.
+**mAP50 (OKS) vs “acuracia visual”:** as métricas mAP50 e Precision/Recall do Ultralytics usam **OKS** (Object Keypoint Similarity), que depende da escala do animal: um mesmo erro em pixels pode ser “correto” em OKS em imagens grandes. Por isso um mAP50 alto (ex.: 99%) pode não corresponder a pontos muito próximos do GT. No mesmo exercício, dataset e estratégia, **a acurácia no teste (proximidade real) costuma ficar em torno de ~60%** (PCK ou distância em px), e não “99%”. O script calcula **PCK** (Percentage of Correct Keypoints: % de pontos com distância ≤ 20px ou ≤ 30px) e **distância média em pixels** — use essas métricas para avaliar a qualidade real no teste. Para uma única imagem: `python scripts/evaluate_keypoints.py --image "caminho/para/imagem.jpg"`.
 
 **O que significa cada métrica (keypoints/pose):**
 

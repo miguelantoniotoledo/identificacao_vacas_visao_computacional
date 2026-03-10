@@ -17,5 +17,6 @@ __pycache__/
 /.ruff_cache/
 /raw/catalogo
 /raw/classificacao
+# Dados processados: train/val/test e folds (gerados por prepare_dataset; não versionar)
 /data/
 /outputs/

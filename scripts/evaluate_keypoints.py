@@ -10,6 +10,7 @@ Uso:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ import numpy as np
 
 from src.config import get_full_config
 from src.evaluation import compute_all_pose_losses, load_yolo_pose_label
+from src.utils.metrics_logger import get_statistics_dir
 
 N_KEYPOINTS = 8
 
@@ -303,11 +305,31 @@ def main() -> None:
         print(f"  Focal loss     (conf vs vis):  {np.mean(all_focal):.6f}")
         print(f"  Heatmap loss   (MSE heatmaps):  {np.mean(all_heatmap):.6f}")
         print()
-        print("  Métricas em pixels (proximidade real pred vs GT):")
-        print(f"  Distância média (px):  {np.mean(all_mean_dist_px):.2f}")
-        print(f"  PCK@20px (% pontos ≤20px): {100 * np.mean(all_pck_20):.1f}%")
-        print(f"  PCK@30px (% pontos ≤30px): {100 * np.mean(all_pck_30):.1f}%")
+        print("  Métricas em pixels (proximidade real pred vs GT) — priorize estas:")
+        dist_mean = float(np.mean(all_mean_dist_px))
+        pck20 = float(np.mean(all_pck_20))
+        pck30 = float(np.mean(all_pck_30))
+        print(f"  Distância média (px):  {dist_mean:.2f}")
+        print(f"  PCK@20px (% pontos ≤20px): {100 * pck20:.1f}%")
+        print(f"  PCK@30px (% pontos ≤30px): {100 * pck30:.1f}%")
         print("  [PCK = Percentage of Correct Keypoints; reflete melhor a 'acuracia visual' que mAP50/OKS.]")
+
+        # Salvar métricas principais em JSON para consulta
+        stats_dir = get_statistics_dir(root)
+        metrics = {
+            "distance_mean_px": round(dist_mean, 2),
+            "pck_20px": round(pck20, 4),
+            "pck_30px": round(pck30, 4),
+            "pck_20px_pct": round(100 * pck20, 1),
+            "pck_30px_pct": round(100 * pck30, 1),
+            "n_samples": n_eval,
+        }
+        latest_path = stats_dir / "evaluate_keypoints_latest.json"
+        with latest_path.open("w", encoding="utf-8") as f:
+            json.dump({"metrics": metrics}, f, ensure_ascii=False, indent=2)
+        print()
+        print(f"  Métricas salvas em: {latest_path}")
+        print("  (Use distance_mean_px, pck_20px e pck_30px para relatar resultado real no teste.)")
 
     print()
     print("Concluído. Use PCK e distância média para avaliar proximidade visual; mAP50/OKS para comparação com literatura.")

@@ -25,6 +25,60 @@ def _get_image_files(images_dir: Path) -> List[Path]:
     return [f for f in images_dir.iterdir() if f.is_file() and f.suffix.lower() in exts]
 
 
+def _clear_yolo_pose_output(out: Path, step_log: Optional[Callable[[str], None]]) -> None:
+    """
+    Remove todos os arquivos das pastas train/val/test (e fold_*) em out,
+    para que treinamentos e testes futuros usem apenas o split gerado nesta execução.
+    """
+    for name in ("train", "val", "test"):
+        for sub in ("images", "labels"):
+            d = out / name / sub
+            if d.exists():
+                for f in d.iterdir():
+                    if f.is_file():
+                        f.unlink()
+                if step_log:
+                    step_log(f"Limpeza: arquivos removidos de {d.relative_to(out)}")
+    for fold_dir in out.iterdir():
+        if fold_dir.is_dir() and fold_dir.name.startswith("fold_"):
+            for name in ("train", "val", "test"):
+                for sub in ("images", "labels"):
+                    d = fold_dir / name / sub
+                    if d.exists():
+                        for f in d.iterdir():
+                            if f.is_file():
+                                f.unlink()
+            fold_yaml = fold_dir / "data.yaml"
+            if fold_yaml.exists():
+                fold_yaml.unlink()
+            if step_log:
+                step_log(f"Limpeza: arquivos removidos de {fold_dir.name}/")
+    data_yaml = out / "data.yaml"
+    if data_yaml.exists():
+        data_yaml.unlink()
+        if step_log:
+            step_log("Limpeza: data.yaml removido (será recriado).")
+
+
+def _clear_classification_split_output(out: Path, step_log: Optional[Callable[[str], None]]) -> None:
+    """
+    Remove todos os arquivos e subpastas de train/val/test em classification_split,
+    para que treinamentos e testes futuros do classificador usem apenas o split desta execução.
+    """
+    for split_name in ("train", "val", "test"):
+        split_dir = out / split_name
+        if not split_dir.exists():
+            continue
+        for cow_dir in list(split_dir.iterdir()):
+            if cow_dir.is_dir():
+                for f in cow_dir.iterdir():
+                    if f.is_file():
+                        f.unlink()
+                cow_dir.rmdir()
+        if step_log:
+            step_log(f"Limpeza (classificador): arquivos removidos de classification_split/{split_name}/")
+
+
 def _group_from_stem(stem: str) -> str:
     """Extrai grupo do nome do arquivo (prefixo antes de __) para group k-fold."""
     if "__" in stem:
@@ -266,6 +320,7 @@ def prepare_classification_split(
 
     out = unified / "classification_split"
     out.mkdir(parents=True, exist_ok=True)
+    _clear_classification_split_output(out, step_log)
     (out / "train").mkdir(exist_ok=True)
     (out / "val").mkdir(exist_ok=True)
     (out / "test").mkdir(exist_ok=True)
@@ -380,6 +435,7 @@ def prepare_pose_dataset(
     out.mkdir(parents=True, exist_ok=True)
     if step_log:
         step_log(f"Diretório de saída: {out}")
+    _clear_yolo_pose_output(out, step_log)
 
     train_f: List[Tuple[Path, Path]] = []
     val_f: List[Tuple[Path, Path]] = []

@@ -31,7 +31,7 @@ data:
 # Estratégia de validação para pose (evita vazamento entre train/val/test)
 pose:
   k_folds: 5                       # número de folds quando strategy = group_kfold
-  strategy: "stratified_per_group" # stratified_per_group | group_kfold | kfold_misturado
+  strategy: "group_kfold" # stratified_per_group | group_kfold | kfold_misturado
 
 # Augmentation no prepare_dataset (offline); mosaic e parâmetros de transformação
 augmentation:
@@ -50,7 +50,7 @@ augmentation:
 # Treino YOLO (keypoints e classificador)
 training:
   device: "0"                     # GPU ("0", "1", ...) ou "cpu"
-  epochs: 50                       # número máximo de épocas
+  epochs: 200                       # número máximo de épocas
   batch_size: 16                 # batch size para treino de keypoints (pose)
   classifier_batch_size: 16      # batch size para treino do classificador
   classifier_imgsz: 320           # tamanho da imagem para o classificador (pixels)
