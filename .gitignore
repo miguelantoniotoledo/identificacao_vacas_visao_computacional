@@ -20,3 +20,5 @@ __pycache__/
 # Dados processados: train/val/test e folds (gerados por prepare_dataset; não versionar)
 /data/
 /outputs/
+# Documento de comparação com projeto de referência (não versionar)
+/docs/COMPARACAO_PROJETO_REFERENCIA.md
