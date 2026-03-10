@@ -71,15 +71,18 @@ python scripts/evaluate_classifier.py --split test   # hold-out final (10%)
 
 ### Como melhorar a acurácia do classificador
 
+*Todas as ações abaixo afetam **apenas** o classificador; nenhuma altera o modelo de pose (keypoints).*
+
 | Ação | Onde / Como |
 |------|-------------|
 | **Regenerar o split** | Rodar `prepare_dataset.py` para garantir 80-10-10 por foto; val/test com as mesmas classes que o train. |
-| **Modelo maior** | Em `config.yaml` → `training.classifier_model: "yolov8s-cls"` (ou `yolov8m-cls`). Maior capacidade; exige mais GPU. |
-| **Imagem maior** | Aumentar `training.classifier_imgsz` (ex.: 384 ou 448). Mais detalhe; mais VRAM e tempo. |
-| **Treino mais longo** | Aumentar `training.epochs` e `training.patience` (ex.: 300 épocas, patience 25) para não parar cedo. |
-| **Learning rate** | Ajustar `training.lr0` (ex.: 0.001) e `training.lrf`; o script repassa ao `model.train()`. |
-| **Batch menor se OOM** | Reduzir `training.classifier_batch_size` (ex.: 8) se der erro de memória com modelo/imagem maiores. |
-| **Qualidade dos dados** | Revisar rótulos: vacas na pasta errada prejudicam acurácia; balancear classes se muito desbalanceado. |
+| **Modelo maior** | `config.yaml` → `training.classifier_model: "yolov8s-cls"` (ou `yolov8m-cls`). Mais capacidade; mais GPU. |
+| **Imagem maior** | `training.classifier_imgsz` (ex.: 384 ou 448). Mais detalhe; mais VRAM. |
+| **Treino mais longo** | `training.epochs` e `training.patience` (ex.: 300 épocas, patience 25). |
+| **Learning rate** | `training.lr0` e `training.lrf` (ex.: 0.001). |
+| **Batch menor se OOM** | `training.classifier_batch_size` (ex.: 8). |
+| **Mais augmentation** | `augmentation.classifier_hsv_h`, `classifier_hsv_s`, `classifier_hsv_v`, `classifier_fliplr` — só classificador. |
+| **Qualidade dos dados** | Revisar rótulos e balancear classes. |
 
 ---
 

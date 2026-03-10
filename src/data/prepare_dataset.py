@@ -330,7 +330,10 @@ def prepare_classification_split(
     n_train, n_val, n_test = 0, 0, 0
     cow_folders = [d for d in class_dir.iterdir() if d.is_dir()]
     if step_log:
-        step_log(f"Split classificação: {len(cow_folders)} classes (vacas). 80% train, 10% val, 10% test por pasta (embaralhamento).")
+        pct_t = int(round(train_ratio * 100))
+        pct_v = int(round(val_ratio * 100))
+        pct_te = int(round(test_ratio * 100))
+        step_log(f"Split classificação: {len(cow_folders)} classes (vacas). {pct_t}% train, {pct_v}% val, {pct_te}% test por pasta (embaralhamento).")
 
     for cow_dir in cow_folders:
         cow_name = cow_dir.name

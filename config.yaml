@@ -22,11 +22,19 @@ data:
   classificacao_subdir: "classificacao"  # subpasta em raw com fotos por vaca (classificador)
   keypoints_subdir: "Key_points"    # subpasta em cada pasta do catálogo com JSONs do Label Studio
   image_size: 640                   # tamanho da imagem para treino/validação (YOLO)
-  train_ratio: 0.8                  # fração para treino no split (ex.: 80%)
-  val_ratio: 0.1                   # fração para validação durante o treino (ex.: 10%)
+  train_ratio: 0.6                  # fração para treino no split (ex.: 80%)
+  val_ratio: 0.3                   # fração para validação durante o treino (ex.: 10%)
   test_ratio: 0.1                  # fração para teste hold-out (ex.: 10%)
   split_test_ratio: 0.1            # usado em alguns fluxos de split global
   random_seed: 42                  # semente para reprodutibilidade dos splits
+
+# =============================================================================
+# Só classificador (não afeta pose/keypoints):
+#   training: classifier_model, classifier_batch_size, classifier_imgsz
+#   augmentation: classifier_hsv_h, classifier_hsv_s, classifier_hsv_v, classifier_fliplr
+#   data: train_ratio, val_ratio, test_ratio (split 80-10-10 do classificador)
+#   app: top_k (predict_cow). O restante (pose.*, train_augment_copies, mosaic_enabled, batch_size...) é pose.
+# =============================================================================
 
 # Estratégia de validação para pose (evita vazamento entre train/val/test)
 pose:
@@ -44,21 +52,26 @@ augmentation:
   hue_saturation: 0.1             # variação de matiz e saturação (HSV)
   contrast_limit: 0.25             # limite de contraste (CLAHE ou similar)
   gaussian_noise_std: 10.0         # desvio padrão do ruído gaussiano adicionado
-  train_augment_copies: 10          # cópias augmentadas por imagem de treino (0 = desligado)
+  train_augment_copies: 10          # cópias augmentadas por imagem de treino POSE (0 = desligado); aumentar (ex.: 15–20) = mais variedade
   mosaic_enabled: true             # gerar imagens mosaic 2x2 (4 imagens) no treino
+  # Classificador: augmentation em tempo de treino (Ultralytics); não usa cópias em disco
+  classifier_hsv_h: 0.015         # matiz (0 = desligado); aumentar = mais variação de cor
+  classifier_hsv_s: 0.5           # saturação (0–1)
+  classifier_hsv_v: 0.4           # brilho (0–1)
+  classifier_fliplr: 0.5          # probabilidade flip horizontal (0–1)
 
 # Treino YOLO (keypoints e classificador)
 training:
-  device: "0"                     # GPU ("0", "1", ...) ou "cpu"
-  epochs: 200                       # número máximo de épocas
-  batch_size: 16                 # batch size para treino de keypoints (pose)
-  classifier_model: "yolov8n-cls" # classificador: yolov8n-cls | yolov8s-cls | yolov8m-cls | yolov8l-cls (maior = mais acurácia, mais VRAM)
-  classifier_batch_size: 16      # batch size para treino do classificador
-  classifier_imgsz: 640           # tamanho da imagem para o classificador (pixels); aumentar (ex.: 384) pode melhorar acurácia
-  lr0: 0.01                      # learning rate inicial (classificador e keypoints)
-  lrf: 0.01                      # fator do LR final (LR_final = lr0 * lrf)
-  patience: 15                    # early stopping: parar se val não melhorar em N épocas
-  workers: 4                      # número de workers no DataLoader
+  device: "0"                     # GPU ou cpu (ambos)
+  epochs: 200                     # épocas máximas (ambos)
+  batch_size: 16                  # só POSE
+  classifier_model: "yolov8n-cls" # só CLASSIFICADOR
+  classifier_batch_size: 16       # só CLASSIFICADOR
+  classifier_imgsz: 640           # só CLASSIFICADOR (pixels)
+  lr0: 0.01                      # ambos
+  lrf: 0.01                      # ambos
+  patience: 5                    # ambos (early stopping)
+  workers: 4                     # ambos
 
 # Keypoints anatômicos (ordem deve coincidir com o Label Studio e com os labels)
 keypoints:

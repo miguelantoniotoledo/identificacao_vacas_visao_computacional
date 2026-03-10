@@ -31,6 +31,7 @@ def main() -> None:
     cfg = get_full_config()
     paths = cfg.get("paths", {})
     training = cfg.get("training", {})
+    aug_cfg = cfg.get("augmentation", {})
 
     root = Path(__file__).resolve().parents[1]
     unified = root / paths.get("unified_dir", "data/unified")
@@ -91,8 +92,8 @@ def main() -> None:
     logger.log(f"Classificador: model={classifier_model}, imgsz={imgsz}, batch={batch}, workers={workers}, lr0={lr0}, lrf={lrf}")
 
     run_dir = root / paths.get("outputs_dir", "outputs") / "classifier" / "train"
-    model = YOLO(classifier_model)
-    model.train(
+    # Augmentation em tempo de treino (Ultralytics); valores do config
+    train_kw = dict(
         data=str(data_dir),
         epochs=epochs,
         batch=batch,
@@ -106,6 +107,12 @@ def main() -> None:
         name="train",
         exist_ok=True,
     )
+    for key in ("classifier_hsv_h", "classifier_hsv_s", "classifier_hsv_v", "classifier_fliplr"):
+        if key in aug_cfg and aug_cfg[key] is not None:
+            arg = key.replace("classifier_", "")
+            train_kw[arg] = float(aug_cfg[key])
+    model = YOLO(classifier_model)
+    model.train(**train_kw)
     logger.log("Treino classificador concluído. Resultado: sucesso")
 
     metrics = {"epochs": epochs, "batch_size": batch, "imgsz": imgsz, "device": device, "n_classes": len(cow_folders)}

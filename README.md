@@ -130,9 +130,16 @@ Todos os comandos são executados na **raiz do projeto** (`python scripts/<scrip
 | predict_cow | `--top-k` *K* | Mostrar top-K classes por imagem (default: config app.top_k). |
 | **predict_keypoints** | `--image` *path* | Caminho para uma imagem única. |
 | predict_keypoints | `--input-dir` *path* | Diretório contendo imagens para detecção de keypoints. |
+| **identify_cow_from_pose** | `--image` *path* | Uma imagem para localizar (pose) e identificar vaca (classificador). |
+| identify_cow_from_pose | `--input-dir` *path* | Diretório com imagens. |
+| identify_cow_from_pose | `--top-k` *K* | Top-K classes por recorte (default: config app.top_k). |
+| identify_cow_from_pose | `--padding` *P* | Margem em torno da bbox do pose, fração (default: 0.1). |
+| identify_cow_from_pose | `--no-fallback` | Não classificar imagem inteira se pose não detectar animal. |
+| identify_cow_from_pose | `--save-crops` | Salvar recortes em outputs/inference/identify_cow_from_pose/crops. |
+| identify_cow_from_pose | `--keypoints-weights` / `--classifier-weights` *path* | Caminhos dos modelos. |
 | **verificar_cuda** | *(nenhum)* | Verifica se PyTorch enxerga CUDA e GPU. |
 
-*Scripts de inferência:* use `--image` **ou** `--input-dir` (ou ambos); pelo menos um é obrigatório em `predict_cow` e `predict_keypoints`.
+*Scripts de inferência:* use `--image` **ou** `--input-dir` (ou ambos). **identify_cow_from_pose:** usa keypoints para localizar a vaca e o classificador para o ID (classes do dataset de classificação).
 
 ---
 

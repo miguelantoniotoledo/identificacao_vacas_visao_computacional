@@ -3,6 +3,10 @@
 Classifica qual vaca está presente em uma ou mais imagens,
 usando o modelo YOLO de classificação treinado.
 
+Use imagens do dataset de classificação (ex.: data/unified/classification_split/test/<vaca>/)
+ou fotos novas no mesmo estilo. Não use imagens de data/unified/yolo_pose/ — esse dataset
+é para o modelo de keypoints (pose), não para o classificador de vacas.
+
 Uso:
   python scripts/predict_cow.py --image caminho/para/imagem.jpg
   python scripts/predict_cow.py --input-dir caminho/para/pasta
