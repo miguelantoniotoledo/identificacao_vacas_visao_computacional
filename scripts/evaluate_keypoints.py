@@ -82,10 +82,32 @@ def main() -> None:
     unified = root / paths.get("unified_dir", "data/unified")
     yolo_pose_dir = unified / "yolo_pose"
     data_yaml = yolo_pose_dir / "data.yaml"
-
+    # Com k-fold, prepare_dataset gera só fold_1/, fold_2/, ... (sem data.yaml na raiz)
     if not data_yaml.exists():
-        print("data.yaml não encontrado. Rode antes: python scripts/prepare_dataset.py")
-        sys.exit(1)
+        best_fold = None
+        stats_dir = root / paths.get("statistics_dir", "outputs/statistics")
+        json_path = stats_dir / "train_keypoints_latest.json"
+        if json_path.exists():
+            try:
+                with open(json_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                best_fold = (data.get("metrics") or {}).get("best_fold")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if best_fold is not None:
+            fold_yaml = yolo_pose_dir / f"fold_{best_fold}" / "data.yaml"
+            if fold_yaml.exists():
+                data_yaml = fold_yaml
+                print(f"Usando conjunto de teste do melhor fold (fold {best_fold}, segundo train_keypoints_latest.json).")
+        if not data_yaml.exists():
+            for i in range(1, 20):
+                fold_yaml = yolo_pose_dir / f"fold_{i}" / "data.yaml"
+                if fold_yaml.exists():
+                    data_yaml = fold_yaml
+                    break
+        if not data_yaml.exists():
+            print("data.yaml não encontrado em yolo_pose/ nem em yolo_pose/fold_N/. Rode antes: python scripts/prepare_dataset.py")
+            sys.exit(1)
 
     keypoints_out = root / paths.get("outputs_dir", "outputs") / "keypoints"
     default_weights = keypoints_out / "train" / "weights" / "best.pt"
@@ -115,8 +137,10 @@ def main() -> None:
             print("Se o treino foi interrompido, existe best.pt em algum outputs/keypoints/fold_N/weights/?")
             sys.exit(1)
 
-    test_images_dir = yolo_pose_dir / "test" / "images"
-    test_labels_dir = yolo_pose_dir / "test" / "labels"
+    # Base do dataset: raiz yolo_pose ou fold_N (quando usa k-fold)
+    data_base = data_yaml.resolve().parent
+    test_images_dir = data_base / "test" / "images"
+    test_labels_dir = data_base / "test" / "labels"
     # Se --image foi passado, avaliar só essa imagem (procurar em test ou pelo path)
     single_image_path = None
     if args.image:

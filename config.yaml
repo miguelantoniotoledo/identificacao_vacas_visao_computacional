@@ -50,7 +50,7 @@ augmentation:
 # Treino YOLO (keypoints e classificador)
 training:
   device: "0"                     # GPU ("0", "1", ...) ou "cpu"
-  epochs: 200                       # número máximo de épocas
+  epochs: 50                       # número máximo de épocas
   batch_size: 16                 # batch size para treino de keypoints (pose)
   classifier_batch_size: 16      # batch size para treino do classificador
   classifier_imgsz: 320           # tamanho da imagem para o classificador (pixels)
