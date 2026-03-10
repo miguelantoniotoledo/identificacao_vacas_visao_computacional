@@ -30,7 +30,7 @@ data:
 
 # Estratégia de validação para pose (evita vazamento entre train/val/test)
 pose:
-  k_folds: 2                       # número de folds quando strategy = group_kfold
+  k_folds: 3                                    # número de folds quando strategy = group_kfold
   strategy: "group_kfold" # stratified_per_group | group_kfold | kfold_misturado
 
 # Augmentation no prepare_dataset (offline); mosaic e parâmetros de transformação

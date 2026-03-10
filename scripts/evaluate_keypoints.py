@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 """
-Avalia o modelo de keypoints no conjunto de TESTE (data/unified/yolo_pose/test).
+Avalia o modelo de keypoints em um conjunto (test ou val).
 - Métricas oficiais do Ultralytics (mAP, etc.) via model.val().
 - Losses de avaliação: IoU, MSE, L1, Cross Entropy, Focal, Heatmap.
 
 Uso:
-  python scripts/evaluate_keypoints.py
+  python scripts/evaluate_keypoints.py              # padrão: split test
+  python scripts/evaluate_keypoints.py --split val # validação
   python scripts/evaluate_keypoints.py --weights outputs/keypoints/train/weights/best.pt
 """
 
@@ -54,7 +55,14 @@ def main() -> None:
         sys.exit(1)
 
     parser = argparse.ArgumentParser(
-        description="Avaliar modelo de keypoints no conjunto de TESTE (métricas + losses)."
+        description="Avaliar modelo de keypoints em test ou val (métricas + losses)."
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        choices=("test", "val"),
+        default="test",
+        help="Conjunto a avaliar: test (hold-out) ou val (validação). Padrão: test.",
     )
     parser.add_argument(
         "--weights",
@@ -71,9 +79,10 @@ def main() -> None:
         "--image",
         type=str,
         default=None,
-        help="Avaliar apenas esta imagem (caminho); exibe PCK e distância média para ela. O label deve estar em test/labels com o mesmo stem.",
+        help="Avaliar apenas esta imagem (caminho); exibe PCK e distância média. O label deve estar em <split>/labels com o mesmo stem.",
     )
     args = parser.parse_args()
+    split = args.split
 
     cfg = get_full_config()
     paths = cfg.get("paths", {})
@@ -139,16 +148,16 @@ def main() -> None:
 
     # Base do dataset: raiz yolo_pose ou fold_N (quando usa k-fold)
     data_base = data_yaml.resolve().parent
-    test_images_dir = data_base / "test" / "images"
-    test_labels_dir = data_base / "test" / "labels"
-    # Se --image foi passado, avaliar só essa imagem (procurar em test ou pelo path)
+    split_images_dir = data_base / split / "images"
+    split_labels_dir = data_base / split / "labels"
+    # Se --image foi passado, avaliar só essa imagem (procurar em <split> ou pelo path)
     single_image_path = None
     if args.image:
         p = Path(args.image)
         if not p.is_absolute():
             p = (root / p).resolve()
         if not p.exists():
-            p = test_images_dir / Path(args.image).name
+            p = split_images_dir / Path(args.image).name
         if p.exists():
             single_image_path = p
             test_image_paths_for_eval = [single_image_path]
@@ -158,26 +167,26 @@ def main() -> None:
     else:
         test_image_paths_for_eval = None
 
-    if not test_images_dir.exists() or not list(test_images_dir.glob("*.*")):
+    if not split_images_dir.exists() or not list(split_images_dir.glob("*.*")):
         if not single_image_path:
-            print("Pasta de teste vazia ou inexistente:", test_images_dir)
+            print(f"Pasta do split '{split}' vazia ou inexistente: {split_images_dir}")
             sys.exit(1)
 
     imgsz = data_cfg.get("image_size", 640)
-    print("Avaliando no conjunto de TESTE (hold-out).")
+    print("Avaliando no conjunto de TESTE (hold-out)." if split == "test" else "Avaliando no conjunto de VALIDAÇÃO.")
     print(f"  Modelo: {weights}")
     print(f"  Data:   {data_yaml}")
-    print(f"  Split:  test | imgsz: {imgsz}")
+    print(f"  Split:  {split} | imgsz: {imgsz}")
     print()
 
     model = YOLO(str(weights))
 
     # 1) Métricas oficiais (mAP, etc.) — baseadas em OKS, não em distância em pixels
-    results_val = model.val(data=str(data_yaml), split="test")
+    results_val = model.val(data=str(data_yaml), split=split)
     if results_val is not None:
         if hasattr(results_val, "results_dict") and results_val.results_dict:
             d = results_val.results_dict
-            print("Métricas no TESTE (Ultralytics, baseadas em OKS):")
+            print(f"Métricas no {split.upper()} (Ultralytics, baseadas em OKS):")
             for k, v in sorted(d.items()):
                 if v is not None and isinstance(v, (int, float)):
                     print(
@@ -189,7 +198,7 @@ def main() -> None:
                 "visualmente distantes. Para 'proximidade em pixels', use PCK e distância média abaixo."
             )
         elif hasattr(results_val, "metrics"):
-            print("Métricas no TESTE:", results_val.metrics)
+            print(f"Métricas no {split.upper()}:", results_val.metrics)
     print()
 
     # 2) Losses por amostra (IoU, MSE, L1, CE, Focal, Heatmap) e métricas em pixels (PCK, distância)
@@ -203,11 +212,11 @@ def main() -> None:
     else:
         test_image_paths = [
             f
-            for f in test_images_dir.iterdir()
+            for f in split_images_dir.iterdir()
             if f.is_file() and f.suffix.lower() in image_exts
         ]
     if not test_image_paths:
-        print("Nenhuma imagem de teste encontrada.")
+        print(f"Nenhuma imagem no split '{split}' encontrada.")
         return
 
     predictions = model.predict(
@@ -225,15 +234,17 @@ def main() -> None:
     all_mean_dist_px = []
     all_pck_20 = []
     all_pck_30 = []
+    all_diagonal = []  # diagonal da imagem por amostra (para normalizar distância)
     n_skipped = 0
+    _printed_first = False
 
     for img_path, res in zip(test_image_paths, predictions):
         stem = img_path.stem
-        labels_dir = test_labels_dir
+        labels_dir = split_labels_dir
         try:
             parts = img_path.resolve().parts
-            if "fold_" in parts and "test" in parts:
-                idx = parts.index("test")
+            if "fold_" in parts and split in parts:
+                idx = parts.index(split)
                 if idx > 0:
                     base = Path(*parts[: idx + 1])
                     fold_labels = base / "labels"
@@ -244,18 +255,29 @@ def main() -> None:
         lbl_path = labels_dir / f"{stem}.txt"
         if not lbl_path.exists():
             for i in range(1, 20):
-                fold_lbl = yolo_pose_dir / f"fold_{i}" / "test" / "labels" / f"{stem}.txt"
+                fold_lbl = yolo_pose_dir / f"fold_{i}" / split / "labels" / f"{stem}.txt"
                 if fold_lbl.exists():
                     lbl_path = fold_lbl
                     break
-        # Tamanho real da imagem para GT (labels normalizados) alinhar com pred (pixels)
+        # Tamanho real da imagem para GT (labels normalizados) alinhar com pred (pixels).
+        # Ultralytics devolve orig_shape como (height, width); sem isso, lemos do disco para evitar escala errada.
         if hasattr(res, "orig_shape") and res.orig_shape is not None:
             try:
-                img_h, img_w = res.orig_shape
+                img_h, img_w = res.orig_shape  # (height, width)
+            except Exception:
+                img_h = img_w = None
+        else:
+            img_h = img_w = None
+        if img_h is None or img_w is None:
+            try:
+                import cv2
+                img = cv2.imread(str(img_path))
+                if img is not None and img.size > 0:
+                    img_h, img_w = img.shape[:2]
+                else:
+                    img_w, img_h = imgsz, imgsz
             except Exception:
                 img_w, img_h = imgsz, imgsz
-        else:
-            img_w, img_h = imgsz, imgsz
 
         gt_list = load_yolo_pose_label(
             str(lbl_path), img_w=img_w, img_h=img_h, n_keypoints=N_KEYPOINTS
@@ -293,6 +315,14 @@ def main() -> None:
         gt_kp_exp = gt_kp[None, :, :]
         gt_vis_exp = gt_vis[None, :]
 
+        if not _printed_first:
+            print("--- Primeira imagem com match (GT vs Pred) ---")
+            print("Imagem:", img_path.name)
+            print("GT:", gt_kp)
+            print("Pred:", p_kp[0])
+            print("----------------------------------------------")
+            _printed_first = True
+
         losses = compute_all_pose_losses(
             pred_boxes=p_boxes,
             pred_kp=p_kp,
@@ -313,11 +343,12 @@ def main() -> None:
         all_mean_dist_px.append(losses["mean_distance_px"])
         all_pck_20.append(losses["pck_20px"])
         all_pck_30.append(losses["pck_30px"])
+        all_diagonal.append(float(np.sqrt(img_w**2 + img_h**2)))
         if single_image_path is not None:
             print(f"  [{img_path.name}] dist_média={losses['mean_distance_px']:.1f}px  PCK@20px={100*losses['pck_20px']:.0f}%  PCK@30px={100*losses['pck_30px']:.0f}%")
 
     n_eval = len(all_iou)
-    print("Losses de avaliação no TESTE (média sobre amostras com predição e GT):")
+    print(f"Losses de avaliação no {split.upper()} (média sobre amostras com predição e GT):")
     if n_eval == 0:
         print("  Nenhuma amostra avaliada (sem predição ou sem GT).")
     else:
@@ -329,34 +360,40 @@ def main() -> None:
         print(f"  Focal loss     (conf vs vis):  {np.mean(all_focal):.6f}")
         print(f"  Heatmap loss   (MSE heatmaps):  {np.mean(all_heatmap):.6f}")
         print()
-        print("  Métricas em pixels (proximidade real pred vs GT) — priorize estas:")
+        print("  Acurácia de proximidade (priorize para relatar resultado real):")
         dist_mean = float(np.mean(all_mean_dist_px))
         pck20 = float(np.mean(all_pck_20))
         pck30 = float(np.mean(all_pck_30))
-        print(f"  Distância média (px):  {dist_mean:.2f}")
-        print(f"  PCK@20px (% pontos ≤20px): {100 * pck20:.1f}%")
-        print(f"  PCK@30px (% pontos ≤30px): {100 * pck30:.1f}%")
-        print("  [PCK = Percentage of Correct Keypoints; reflete melhor a 'acuracia visual' que mAP50/OKS.]")
+        # Distância média normalizada pela diagonal da imagem (0 = perfeito, comparável entre resoluções)
+        norm_dists = [all_mean_dist_px[i] / all_diagonal[i] for i in range(n_eval) if all_diagonal[i] > 0]
+        dist_mean_norm = float(np.mean(norm_dists)) if norm_dists else 0.0
+        print(f"  PCK@30px (acuracia de proximidade): {100 * pck30:.1f}%")
+        print(f"  PCK@20px:                          {100 * pck20:.1f}%")
+        print(f"  Distância média (px):               {dist_mean:.2f}")
+        print(f"  Distância média normalizada (0–1):  {dist_mean_norm:.4f}  (÷ diagonal da imagem)")
+        print("  [Use PCK@30px ou distância normalizada para comparar entre resoluções; mAP50/OKS é referência.]")
 
         # Salvar métricas principais em JSON para consulta
         stats_dir = get_statistics_dir(root)
         metrics = {
-            "distance_mean_px": round(dist_mean, 2),
-            "pck_20px": round(pck20, 4),
-            "pck_30px": round(pck30, 4),
+            "accuracy_proximity_pck30_pct": round(100 * pck30, 1),
             "pck_20px_pct": round(100 * pck20, 1),
             "pck_30px_pct": round(100 * pck30, 1),
+            "distance_mean_px": round(dist_mean, 2),
+            "distance_mean_normalized": round(dist_mean_norm, 4),
+            "pck_20px": round(pck20, 4),
+            "pck_30px": round(pck30, 4),
             "n_samples": n_eval,
         }
-        latest_path = stats_dir / "evaluate_keypoints_latest.json"
+        latest_path = stats_dir / f"evaluate_keypoints_{split}_latest.json"
         with latest_path.open("w", encoding="utf-8") as f:
-            json.dump({"metrics": metrics}, f, ensure_ascii=False, indent=2)
+            json.dump({"split": split, "metrics": metrics}, f, ensure_ascii=False, indent=2)
         print()
         print(f"  Métricas salvas em: {latest_path}")
-        print("  (Use distance_mean_px, pck_20px e pck_30px para relatar resultado real no teste.)")
+        print("  (Para relatório: use accuracy_proximity_pck30_pct ou distance_mean_normalized.)")
 
     print()
-    print("Concluído. Use PCK e distância média para avaliar proximidade visual; mAP50/OKS para comparação com literatura.")
+    print("Concluído. Acurácia de proximidade = PCK@30px; mAP50/OKS = referência para literatura.")
 
 
 if __name__ == "__main__":
