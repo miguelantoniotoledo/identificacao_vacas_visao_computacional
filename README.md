@@ -54,7 +54,7 @@ visualize_keypoints →  outputs/vis/keypoints/ + keypoints_val/ + keypoints_tes
 
 **Keypoints no teste:** priorize **PCK@20px**, **PCK@30px** e **distância média (px)** para “acurácia real”; mAP50 (OKS) costuma ser alto (~99%) e não reflete proximidade em pixels. 
 
-**Classificador:** `evaluate_classifier.py` usa imagens com rótulo (val/test) e calcula acurácia; `predict_cow.py` faz só inferência em imagens novas.
+**Classificador:** `evaluate_classifier.py` usa imagens com rótulo (val/test) e calcula acurácia; `predict_cow.py` faz só inferência em imagens novas. Para **melhorar a acurácia** do classificador (modelo maior, imagem maior, LR, dados): [Métricas e acurácias → Como melhorar a acurácia do classificador](docs/METRICAS_ACURACIAS_MODELOS.md#como-melhorar-a-acurácia-do-classificador).
 
 ---
 

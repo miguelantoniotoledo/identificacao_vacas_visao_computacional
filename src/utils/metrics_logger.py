@@ -233,10 +233,10 @@ def extract_yolo_metrics_and_plot(
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
-            fig, ax = plt.subplots(figsize=(10, 5))
             numeric_cols = [c for c in rows[0].keys() if c and rows[0].get(c) and _is_num(rows[0].get(c))]
+            epochs = [int(r.get("epoch", i)) if _is_num(r.get("epoch")) else i for i, r in enumerate(rows)]
             if len(numeric_cols) > 1:
-                epochs = [int(r.get("epoch", i)) if _is_num(r.get("epoch")) else i for i, r in enumerate(rows)]
+                fig, ax = plt.subplots(figsize=(10, 5))
                 for col in numeric_cols[:8]:
                     vals = [_safe_float(r.get(col)) for r in rows]
                     if any(v is not None for v in vals):
@@ -247,6 +247,47 @@ def extract_yolo_metrics_and_plot(
                 plt.xticks(rotation=45)
                 fig.tight_layout()
                 save_plot_png(fig, f"{plot_prefix}_curves", root)
+            # Gráfico extra: acurácia (val) e loss (treino vs validação) vs épocas (classificador)
+            acc_cols = [c for c in ("metrics/accuracy_top1", "metrics/accuracy_top5") if c in rows[0]]
+            loss_train = "train/loss" in rows[0]
+            loss_val = "val/loss" in rows[0]
+            if acc_cols or (loss_train and loss_val):
+                n_plots = 2 if (acc_cols and (loss_train or loss_val)) else 1
+                fig2, axes = plt.subplots(1, n_plots, figsize=(6 * n_plots, 4))
+                if n_plots == 1:
+                    axes = [axes]
+                idx = 0
+                if acc_cols:
+                    ax_acc = axes[idx]
+                    idx += 1
+                    for col in acc_cols:
+                        vals = [_safe_float(r.get(col)) for r in rows]
+                        if any(v is not None for v in vals):
+                            label = "Val top-1" if "top1" in col else "Val top-5"
+                            ax_acc.plot(epochs, vals, label=label, alpha=0.9)
+                    ax_acc.set_xlabel("Época")
+                    ax_acc.set_ylabel("Acurácia (validação)")
+                    ax_acc.set_ylim(0, 1.02)
+                    ax_acc.legend(loc="best")
+                    ax_acc.grid(True, alpha=0.3)
+                    ax_acc.set_title("Acurácia na validação")
+                if loss_train or loss_val:
+                    ax_loss = axes[idx]
+                    if loss_train:
+                        vals = [_safe_float(r.get("train/loss")) for r in rows]
+                        if any(v is not None for v in vals):
+                            ax_loss.plot(epochs, vals, label="Treino (loss)", alpha=0.9)
+                    if loss_val:
+                        vals = [_safe_float(r.get("val/loss")) for r in rows]
+                        if any(v is not None for v in vals):
+                            ax_loss.plot(epochs, vals, label="Validação (loss)", alpha=0.9)
+                    ax_loss.set_xlabel("Época")
+                    ax_loss.set_ylabel("Loss")
+                    ax_loss.legend(loc="best")
+                    ax_loss.grid(True, alpha=0.3)
+                    ax_loss.set_title("Loss: treino vs validação")
+                fig2.tight_layout()
+                save_plot_png(fig2, f"{plot_prefix}_accuracy_loss", root)
         except Exception:
             pass
         return metrics

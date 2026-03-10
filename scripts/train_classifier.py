@@ -80,13 +80,18 @@ def main() -> None:
     imgsz = training.get("classifier_imgsz", 224)
     patience = training.get("patience", 20)  # early stopping
     workers = training.get("workers", 4)
+    lr0 = training.get("lr0", 0.01)
+    lrf = training.get("lrf", 0.01)
+    classifier_model = training.get("classifier_model", "yolov8n-cls")
+    if not classifier_model.endswith(".pt"):
+        classifier_model = f"{classifier_model}.pt" if "." not in classifier_model else classifier_model
     # workers=0 reduz uso de memória (evita pin_memory) e ajuda em GPUs com pouca VRAM
     workers = 0 if device != "cpu" else workers
     logger.log(f"Early stopping: patience={patience} épocas (treino interrompe se val não melhorar)")
-    logger.log(f"Classificador: imgsz={imgsz}, batch={batch}, workers={workers}")
+    logger.log(f"Classificador: model={classifier_model}, imgsz={imgsz}, batch={batch}, workers={workers}, lr0={lr0}, lrf={lrf}")
 
     run_dir = root / paths.get("outputs_dir", "outputs") / "classifier" / "train"
-    model = YOLO("yolov8n-cls.pt")
+    model = YOLO(classifier_model)
     model.train(
         data=str(data_dir),
         epochs=epochs,
@@ -95,6 +100,8 @@ def main() -> None:
         device=device,
         patience=patience,
         workers=workers,
+        lr0=lr0,
+        lrf=lrf,
         project=str(root / paths.get("outputs_dir", "outputs") / "classifier"),
         name="train",
         exist_ok=True,

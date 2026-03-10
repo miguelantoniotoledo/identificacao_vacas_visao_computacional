@@ -44,7 +44,7 @@ augmentation:
   hue_saturation: 0.1             # variação de matiz e saturação (HSV)
   contrast_limit: 0.25             # limite de contraste (CLAHE ou similar)
   gaussian_noise_std: 10.0         # desvio padrão do ruído gaussiano adicionado
-  train_augment_copies: 5-          # cópias augmentadas por imagem de treino (0 = desligado)
+  train_augment_copies: 10          # cópias augmentadas por imagem de treino (0 = desligado)
   mosaic_enabled: true             # gerar imagens mosaic 2x2 (4 imagens) no treino
 
 # Treino YOLO (keypoints e classificador)
@@ -52,11 +52,12 @@ training:
   device: "0"                     # GPU ("0", "1", ...) ou "cpu"
   epochs: 200                       # número máximo de épocas
   batch_size: 16                 # batch size para treino de keypoints (pose)
+  classifier_model: "yolov8n-cls" # classificador: yolov8n-cls | yolov8s-cls | yolov8m-cls | yolov8l-cls (maior = mais acurácia, mais VRAM)
   classifier_batch_size: 16      # batch size para treino do classificador
-  classifier_imgsz: 320           # tamanho da imagem para o classificador (pixels)
-  lr0: 0.01                      # learning rate inicial
+  classifier_imgsz: 640           # tamanho da imagem para o classificador (pixels); aumentar (ex.: 384) pode melhorar acurácia
+  lr0: 0.01                      # learning rate inicial (classificador e keypoints)
   lrf: 0.01                      # fator do LR final (LR_final = lr0 * lrf)
-  patience: 10                    # early stopping: parar se val não melhorar em N épocas
+  patience: 15                    # early stopping: parar se val não melhorar em N épocas
   workers: 4                      # número de workers no DataLoader
 
 # Keypoints anatômicos (ordem deve coincidir com o Label Studio e com os labels)

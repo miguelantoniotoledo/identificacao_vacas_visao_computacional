@@ -69,6 +69,18 @@ python scripts/evaluate_classifier.py --split test   # hold-out final (10%)
 - **Saída:** top-1 e top-5 no terminal e em `outputs/statistics/evaluate_classifier_latest.json`.
 - **Pré-requisito:** ter rodado `prepare_dataset.py` para gerar `data/unified/classification_split/` com a estratégia 80-10-10 por foto; train/val/test devem ter as mesmas pastas (classes).
 
+### Como melhorar a acurácia do classificador
+
+| Ação | Onde / Como |
+|------|-------------|
+| **Regenerar o split** | Rodar `prepare_dataset.py` para garantir 80-10-10 por foto; val/test com as mesmas classes que o train. |
+| **Modelo maior** | Em `config.yaml` → `training.classifier_model: "yolov8s-cls"` (ou `yolov8m-cls`). Maior capacidade; exige mais GPU. |
+| **Imagem maior** | Aumentar `training.classifier_imgsz` (ex.: 384 ou 448). Mais detalhe; mais VRAM e tempo. |
+| **Treino mais longo** | Aumentar `training.epochs` e `training.patience` (ex.: 300 épocas, patience 25) para não parar cedo. |
+| **Learning rate** | Ajustar `training.lr0` (ex.: 0.001) e `training.lrf`; o script repassa ao `model.train()`. |
+| **Batch menor se OOM** | Reduzir `training.classifier_batch_size` (ex.: 8) se der erro de memória com modelo/imagem maiores. |
+| **Qualidade dos dados** | Revisar rótulos: vacas na pasta errada prejudicam acurácia; balancear classes se muito desbalanceado. |
+
 ---
 
 ## 3. Exemplo de pipeline para verificar acurácia no teste
