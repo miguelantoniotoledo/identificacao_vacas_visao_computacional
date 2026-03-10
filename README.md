@@ -100,6 +100,42 @@ raw/
 
 ---
 
+## Chamadas dos scripts (referência)
+
+Todos os comandos são executados na **raiz do projeto** (`python scripts/<script>.py ...`).
+
+| Script | Argumentos possíveis | Descrição do argumento |
+|--------|----------------------|-------------------------|
+| **pipeline** | `--skip-train-keypoints` | Pular treino do modelo de keypoints (YOLO pose). |
+| pipeline | `--skip-train-classifier` | Pular treino do classificador de vacas (YOLO cls). |
+| pipeline | `--skip-visualize` | Pular geração de visualizações de keypoints. |
+| pipeline | `--skip-eda` | Pular análise exploratória (EDA) das features. |
+| **unify_and_convert** | `--debug` | Imprimir resumo no terminal e as primeiras 15 falhas com motivo (para debugar). |
+| **prepare_dataset** | *(nenhum)* | Gera yolo_pose/ e classification_split/ a partir de data/unified. |
+| **analisar_features** | *(nenhum)* | Gera EDA em outputs/statistics/eda/. |
+| **train_keypoints** | *(nenhum)* | Treina modelo de pose; usa config e data/unified/yolo_pose. |
+| **train_classifier** | *(nenhum)* | Treina classificador; usa config e classification_split ou classification. |
+| **evaluate_keypoints** | `--split` `test` \| `val` | Conjunto a avaliar (padrão: test). |
+| evaluate_keypoints | `--weights` *path* | Caminho do modelo (ex.: outputs/keypoints/train/weights/best.pt). |
+| evaluate_keypoints | `--no-losses` | Só rodar model.val(); não calcular losses por amostra. |
+| evaluate_keypoints | `--image` *path* | Avaliar apenas esta imagem; label em \<split\>/labels com mesmo stem. |
+| **evaluate_classifier** | `--split` `val` \| `test` | Pasta a usar: val (10%) ou test (hold-out). Padrão: val. |
+| evaluate_classifier | `--weights` *path* | Caminho do modelo (ex.: outputs/classifier/train/weights/best.pt). |
+| **visualize_keypoints** | *(nenhum)* | Gera visualizações em outputs/vis/keypoints/, keypoints_val/, keypoints_test/. |
+| **verificar_unify_convert** | `--amostras` *N* | Mostrar conteúdo dos primeiros N arquivos de label (0 = não mostrar). |
+| verificar_unify_convert | `--plot` *N* | Plotar N imagens com bbox e keypoints; salva em outputs/statistics/verificar_unify_convert/. |
+| verificar_unify_convert | `--image` *path* | Uma única imagem para desenhar anotações originais (keypoints). |
+| **predict_cow** | `--image` *path* | Caminho para uma imagem única. |
+| predict_cow | `--input-dir` *path* | Diretório contendo imagens para classificação. |
+| predict_cow | `--top-k` *K* | Mostrar top-K classes por imagem (default: config app.top_k). |
+| **predict_keypoints** | `--image` *path* | Caminho para uma imagem única. |
+| predict_keypoints | `--input-dir` *path* | Diretório contendo imagens para detecção de keypoints. |
+| **verificar_cuda** | *(nenhum)* | Verifica se PyTorch enxerga CUDA e GPU. |
+
+*Scripts de inferência:* use `--image` **ou** `--input-dir` (ou ambos); pelo menos um é obrigatório em `predict_cow` e `predict_keypoints`.
+
+---
+
 ## Estrutura do projeto
 
 ```
