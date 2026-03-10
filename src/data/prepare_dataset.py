@@ -1,8 +1,9 @@
 """
 Prepara splits train/val/test e estrutura YOLO para treino.
-- stratified_per_group: em cada pasta (grupo), 80%% treino, 10%% validação e 10%% teste,
-  garantindo que train/val/test são conjuntos disjuntos (sem vazamento).
-- group_kfold: grupos inteiros em train ou val por fold (para k_folds > 1).
+- stratified_per_group: em cada grupo (indivíduo), 80%% treino, 10%% val, 10%% teste por grupo (sem overlap de fotos).
+- group_kfold: split por indivíduo (não por foto). Primeiro divide os grupos em train/val/test (ex.: 80%% dos
+  indivíduos para train, 10%% val, 10%% test); todas as fotos de um indivíduo ficam no mesmo split (evita vazamento).
+  Se k_folds > 1, GroupKFold reparte apenas train+val por fold; test é hold-out fixo de indivíduos.
 """
 
 import random
@@ -464,6 +465,7 @@ def prepare_pose_dataset(
             step_log(
                 f"Split definido: Train={len(train_f)}, Val={len(val_f)}, Test={len(test_f)}. Sem overlap."
             )
+        # Augmentation e mosaic apenas em train; val e test recebem só cópia (sem transformação).
         for split_list, name in [(train_f, "train"), (val_f, "val"), (test_f, "test")]:
             img_out = out / name / "images"
             lbl_out = out / name / "labels"
@@ -554,15 +556,45 @@ def prepare_pose_dataset(
         }
         return out / "train", out / "val", out / "test", counts
 
-    # Estratificado já tratado; abaixo: split global (random) ou group_kfold
-    n_test = int(n_total * test_ratio)
-    shuffled = list(files)
-    random.shuffle(shuffled)
-    test_f = shuffled[:n_test]
-    train_val_f = shuffled[n_test:]
+    # Split por indivíduo (grupo) para group_kfold: evita vazamento (train/val/test sem overlap de indivíduos)
+    # Caso contrário: split global (random) por imagem.
+    if strategy == "group_kfold":
+        # Shuffle grupos e dividir por quantidade de grupos (não por fotos)
+        shuffled_groups = list(unique_groups)
+        random.shuffle(shuffled_groups)
+        n_test_g = max(1, int(round(n_groups * test_ratio))) if n_groups >= 2 else 0
+        n_val_g = max(0, int(round(n_groups * val_ratio)))
+        n_train_g = n_groups - n_test_g - n_val_g
+        if n_train_g < 1:
+            n_train_g = 1
+            n_test_g = max(0, n_groups - n_val_g - 1)
+        if n_test_g < 0:
+            n_test_g = 0
+        test_groups = set(shuffled_groups[:n_test_g]) if n_test_g else set()
+        val_groups = set(shuffled_groups[n_test_g : n_test_g + n_val_g]) if n_val_g else set()
+        train_groups = set(shuffled_groups[n_test_g + n_val_g :])
+        train_f = [(img, lbl) for img, lbl in files if _group_from_stem(img.stem) in train_groups]
+        val_f = [(img, lbl) for img, lbl in files if _group_from_stem(img.stem) in val_groups]
+        test_f = [(img, lbl) for img, lbl in files if _group_from_stem(img.stem) in test_groups]
+        train_val_f = train_f + val_f
+        if step_log:
+            step_log(
+                f"Split por indivíduo (group_kfold): {len(train_groups)} grupos train, {len(val_groups)} val, {len(test_groups)} test. "
+                f"Imagens: train={len(train_f)}, val={len(val_f)}, test={len(test_f)}. Sem overlap de indivíduos."
+            )
+    else:
+        # Split global por imagem (comportamento antigo)
+        n_test = int(n_total * test_ratio)
+        shuffled = list(files)
+        random.shuffle(shuffled)
+        test_f = shuffled[:n_test]
+        train_val_f = shuffled[n_test:]
+        train_f = []
+        val_f = []
+
     groups = [_group_from_stem(img.stem) for img, _ in train_val_f]
 
-    if k_folds > 1 and strategy == "group_kfold" and n_groups >= k_folds:
+    if k_folds > 1 and strategy == "group_kfold" and n_groups >= k_folds and len(train_val_f) >= k_folds:
         try:
             from sklearn.model_selection import GroupKFold
         except ImportError:
@@ -577,6 +609,7 @@ def prepare_pose_dataset(
                 fold_dir = out / fold_name
                 train_fold = [train_val_f[i] for i in train_idx]
                 val_fold = [train_val_f[i] for i in val_idx]
+                # Augmentation e mosaic apenas em train; val e test (fold) recebem só cópia.
                 for split_list, name in [(train_fold, "train"), (val_fold, "val")]:
                     img_out = fold_dir / name / "images"
                     lbl_out = fold_dir / name / "labels"
@@ -657,7 +690,83 @@ def prepare_pose_dataset(
             }
             return out / "fold_1" / "train", out / "fold_1" / "val", out / "fold_1" / "test", counts
 
-    # Split único (sem k-fold)
+    # group_kfold com k_folds <= 1: um único split já por indivíduo (train_f, val_f, test_f já definidos)
+    if strategy == "group_kfold" and (len(train_f) + len(val_f) + len(test_f)) > 0:
+        if step_log:
+            step_log(f"Split único por indivíduo (group_kfold): copiando train={len(train_f)}, val={len(val_f)}, test={len(test_f)}...")
+        # Augmentation e mosaic apenas em train; val e test só cópia.
+        for split_list, name in [(train_f, "train"), (val_f, "val"), (test_f, "test")]:
+            img_out = out / name / "images"
+            lbl_out = out / name / "labels"
+            img_out.mkdir(parents=True, exist_ok=True)
+            lbl_out.mkdir(parents=True, exist_ok=True)
+            total = len(split_list)
+            if step_log and total:
+                step_log(f"Copiando {total} arquivos para {name}/...")
+            for i, (img, lbl) in enumerate(split_list):
+                shutil.copy2(img, img_out / img.name)
+                shutil.copy2(lbl, lbl_out / lbl.name)
+                if step_log and (i + 1) % 100 == 0 and total:
+                    step_log(f"  {name}: {i + 1}/{total}")
+            if name == "train" and train_augment_copies > 0 and split_list:
+                offline_transform = get_offline_pose_augmentation()
+                if step_log:
+                    step_log("Aplicando augmentations em train...")
+                for i, (img, lbl) in enumerate(split_list):
+                    _apply_train_augmentation(
+                        img_out / img.name,
+                        lbl_out / lbl.name,
+                        img_out,
+                        lbl_out,
+                        train_augment_copies,
+                        contrast_limit,
+                        gaussian_noise_std,
+                        transform=offline_transform,
+                    )
+                if step_log:
+                    step_log(f"  augmentation: {total}/{total} concluído.")
+            if name == "train" and mosaic_enabled and len(split_list) >= 4:
+                n_mosaic = len(split_list) // 4
+                shuffled_train = list(split_list)
+                random.shuffle(shuffled_train)
+                if step_log:
+                    step_log(f"Gerando {n_mosaic} mosaic em train/...")
+                for i in range(n_mosaic):
+                    group = shuffled_train[i * 4 : (i + 1) * 4]
+                    four = []
+                    for img_path, lbl_path in group:
+                        im = _imread_unicode(img_path)
+                        line = lbl_path.read_text(encoding="utf-8").strip()
+                        if not line:
+                            break
+                        four.append((im, line))
+                    if len(four) == 4:
+                        _create_mosaic_pose(four, img_out, lbl_out, i + 1, image_size)
+        data_yaml = {
+            **base_yaml,
+            "path": str(out.resolve()),
+            "train": "train/images",
+            "val": "val/images",
+            "test": "test/images",
+        }
+        (out / "data.yaml").write_text(
+            yaml.dump(data_yaml, default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        if step_log:
+            step_log(f"data.yaml gerado em {out}. Split por indivíduo (sem vazamento).")
+        counts = {
+            "n_train": len(train_f),
+            "n_val": len(val_f),
+            "n_test": len(test_f),
+            "n_total": n_total,
+            "k_folds": 1,
+            "n_groups": n_groups,
+            "strategy": "group_kfold",
+        }
+        return out / "train", out / "val", out / "test", counts
+
+    # Split único por quantidade de imagens (estratégias que não são group_kfold)
     n_train = int(len(train_val_f) * train_ratio)
     n_val = len(train_val_f) - n_train
     train_f = train_val_f[:n_train]
@@ -665,6 +774,7 @@ def prepare_pose_dataset(
     if k_folds <= 1 or n_groups < k_folds:
         if step_log:
             step_log(f"Split único: Train={len(train_f)}, Val={len(val_f)}, Test={len(test_f)}. Copiando...")
+        # Augmentation e mosaic apenas em train; val e test só cópia.
         for split_list, name in [(train_f, "train"), (val_f, "val"), (test_f, "test")]:
             img_out = out / name / "images"
             lbl_out = out / name / "labels"
